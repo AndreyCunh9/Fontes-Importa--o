@@ -1,0 +1,171 @@
+#INCLUDE 'totvs.ch'
+#INCLUDE 'protheus.ch'
+
+/*/{Protheus.doc} ULOJE003
+// Fun��o para integra��o com a API do Bot Protheus - Download de XMLs fiscais
+/*/
+User Function ULOJE003(dDataProc)
+    Local cToken      := U_GETTOKENBOT()
+    Local nDiasAnt    := SuperGetMv("HV_DIASANT",,1) // Par�metro para definir quantos dias atr�s a consulta deve considerar, default 1 dia
+    Local cDataOntem  := SubStr(DtoS(Date()-nDiasAnt),1,4) + "-" + SubStr(DtoS(Date()-nDiasAnt),5,2) + "-" + SubStr(DtoS(Date()-nDiasAnt),7,2)
+    Local cStartDate  := cDataOntem + "%2000:00:00"
+    Local cEndDate    := cDataOntem + "%2023:59:59"
+    Local cDataPasta  := StrTran(cDataOntem, "-", "")
+    Local cDocID      := ""
+    Local cDownloadUrl:= ""
+    Default dDataProc := CTOD("")
+
+    If !Empty(dDataProc)
+        cDataOntem := SubStr(DtoS(dDataProc),1,4) + "-" + SubStr(DtoS(dDataProc),5,2) + "-" + SubStr(DtoS(dDataProc),7,2)
+        cStartDate  := cDataOntem + "%2000:00:00"
+        cEndDate    := cDataOntem + "%2023:59:59"
+        cDataPasta  := StrTran(cDataOntem, "-", "")
+        // return
+    EndIf
+
+    ConOut("[ULOJE003] Iniciando processo para a data: " + cDataOntem)
+
+    If Empty(cToken)
+        ConOut("[ULOJE003] Erro: Token de autenticacao nao obtido.")
+        Return
+    EndIf
+
+    // 1. Solicita a gera��o do ZIP (POST)
+    cDocID := ReqDocZip(cToken, cStartDate, cEndDate)
+
+    If !Empty(cDocID)
+        ConOut("[ULOJE003] Solicitacao aceita. ID: " + cDocID)
+        
+        // 2. Aguarda o status "FINISHED" (Polling de 15 minutos)
+        cDownloadUrl := ChkDocZip(cToken, cDocID)
+
+        If !Empty(cDownloadUrl)
+            // 3. Download via FWRest e Extra��o via FUnZip
+            ProcDocZip(cDownloadUrl, cDataPasta)
+        Else
+            ConOut("[ULOJE003] Timeout: O arquivo nao ficou pronto em 2 horas.")
+        EndIf
+    EndIf
+Return Nil
+
+//-------------------------------------------------------------------
+/* Download do ZIP e Extra��o usando FUnZip */
+Static Function ProcDocZip(cFullUrl, cDataPasta)
+    Local oRest     := Nil
+    Local cPathBase := "\fiscal_xmls\" + cDataPasta + "\"
+    Local cFileZip  := cPathBase + "temp_notas.zip"
+    Local cHost     := ""
+    Local cPath     := ""
+    Local nRetUnzip := 0
+
+    // Separa Host de Path para o FWRest
+    cHost := SubStr(cFullUrl, 1, At(".com", cFullUrl) + 3)
+    cPath := SubStr(cFullUrl, At(".com", cFullUrl) + 4)
+
+    oRest := FWRest():New(cHost)
+    oRest:SetPath(cPath)
+
+    If oRest:Get()
+        // Cria os diretorios se nao existirem
+        If !ExistDir("\fiscal_xmls\") ; MakeDir("\fiscal_xmls\") ; EndIf
+        If !ExistDir(cPathBase)       ; MakeDir(cPathBase)       ; EndIf
+
+        // Grava o ZIP tempor�rio
+        MemoWrite(cFileZip, oRest:GetResult())
+        
+        ConOut("[ULOJE003] Download concluido. Extraindo via FUnZip...")
+
+        // FUnZip( <ArquivoZip>, <DiretorioDestino> )
+        // Retorna 0 se for bem sucedido
+        nRetUnzip := FUnZip(cFileZip, cPathBase)
+
+        If nRetUnzip == 0
+            ConOut("[ULOJE003] Sucesso! XMLs extraidos em: " + cPathBase)
+            fErase(cFileZip) // Remove o arquivo ZIP ap�s extra��o
+        Else
+            ConOut("[ULOJE003] Erro na extracao via FUnZip. Codigo: " + cValToChar(nRetUnzip))
+        EndIf
+    Else
+        ConOut("[ULOJE003] Erro no download: " + oRest:GetLastError())
+    EndIf
+Return Nil
+
+//-------------------------------------------------------------------
+/* Funcao de acompanhamento (Polling) - 2 horas */
+Static Function ChkDocZip(cToken, cID)
+    Local oRest     := FWRest():New("https://api.grupoboticario.com.br")
+    Local oJson     := JsonObject():New()
+    Local cPath     := "/global/v1/franchising/gb-stores-data/fiscal/documents/" + cID
+    Local aHeaders  := {'Authorization: Bearer ' + cToken}
+    Local cUrl      := ""
+    Local cStatus   := "PENDING"
+    Local nTenta    := 0
+    Local nMaxTenta := 1440 // 2 horas (tempo de resposta da API varia de 15 min a 2h)
+
+    oRest:SetPath(cPath)
+
+    While (cStatus == "PENDING" .And. nTenta < nMaxTenta)
+        Sleep(5000)
+        nTenta++
+        
+        If oRest:Get(aHeaders)
+            oJson:FromJson(oRest:GetResult())
+            cStatus := oJson['status']
+            ConOut("[ULOJE003] Status: " + cStatus + " (" + cValToChar(nTenta) + "/180)")
+            
+            If cStatus == "FINISHED"
+                cUrl := oJson['url']
+            EndIf
+        EndIf
+    EndDo
+Return cUrl
+
+//-------------------------------------------------------------------
+/* POST inicial para solicitar o arquivo */
+Static Function ReqDocZip(cToken, cStart, cEnd)
+    Local oRest     := FWRest():New("https://api.grupoboticario.com.br")
+    Local oJson     := JsonObject():New()
+    Local aHeaders  := {'Authorization: Bearer ' + cToken, 'Content-Type: application/json'}
+    Local cID       := ""
+    Local cJsonBody := ""
+
+    // 1. Remova o %20 e use espa�o real para o JSON Body
+    cStart := StrTran(cStart, "%20", " ")
+    cEnd   := StrTran(cEnd, "%20", " ")
+
+    // 2. Monte o objeto JSON de forma estruturada
+    oJson['startDate']     := cStart
+    oJson['endDate']       := cEnd
+    oJson['referenceDate'] := "ISSUED"
+
+    // 3. Converta o objeto para String (gera as chaves {} automaticamente)
+    cJsonBody := oJson:ToJson()
+
+    oRest:SetPath("/global/v1/franchising/gb-stores-data/fiscal/documents")
+    
+    // Conforme TDN e Terminal de Informa��o, usamos SetPostParams para o corpo
+    oRest:SetPostParams(cJsonBody)
+
+    oRest:Post(aHeaders)//Est� sempre retornando falso
+    If oRest:GetLastError() == "202 Accepted"//Tratamos ent�o aqui o retorno
+        oJson:FromJson(oRest:GetResult())
+        cID := oJson['id']
+    Else
+        ConOut("[ULOJE003] Erro no POST: " + Iif(ValType(oRest:GetLastError()) == "C", oRest:GetLastError(), "Erro desconhecido"))
+        // O GetResult() em caso de 400 costuma trazer o motivo do erro da API
+        ConOut("[ULOJE003] Detalhe do Erro: " + Iif(ValType(oRest:GetResult()) == "C", oRest:GetResult(), "Erro desconhecido"))
+    EndIf
+Return cID
+
+User Function JLOJE003()
+    Local dDataProc := SToD("20260101") 
+
+    ConOut("[JLOJE003] Prerando ambiente.")
+    RpcSetEnv("01","010101")
+    ConOut("[JLOJE003] Ambiente configurado "+cFilAnt+".")
+
+    While dDataProc <> Date()
+        U_ULOJE003(dDataProc)
+        dDataProc += 1
+    EndDo
+Return

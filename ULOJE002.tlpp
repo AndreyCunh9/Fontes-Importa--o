@@ -1,0 +1,660 @@
+#Include 'Protheus.ch'
+#Include 'RestFul.CH'
+#Include 'Totvs.ch'
+
+/*/{Protheus.doc} ULOJE002
+// Função para processar a integração dos JSN/XMLs fiscais baixados via API do Bot Protheus
+/*/
+User Function ULOJE002()
+    Local oJson         := JsonObject():New()
+	Local oFinanceiro  	:= JsonObject():New()
+	Local oXml          := Nil
+    Local cErro         := ""
+    Local cError        := ""
+    Local cWarning      := ""
+	Local cItem		 	:= ""
+    Local aItens    	:= {}
+	// Local nRegistros 	:= 0
+	Local nX			:= 0
+    Local lOk 			:= .F.
+	Private aSL1        := {}
+	Private aSL2        := {}
+	Private aSL4        := {}
+    Private cMsgError   := ""
+    Private cNumDoc     := ""
+    Private cSerie      := ""
+    Private dEmissao    := CToD(" / / ")
+    Private nVlrMerc    := 0
+    Private nVlrTot     := 0
+    Private nVlrDI      := 0
+    Private nVlrFI      := 0
+    Private nVlrCC      := 0
+    Private nVlrCH      := 0
+    Private nVlrCD      := 0
+    Private nVlrPD      := 0
+    Private nVlrPX      := 0
+    Private nVlrVA      := 0
+	Private cDoc 		:= ""
+	Private aSC5 		:= {}
+	Private aSC6 		:= {}
+	Private lMsErroAuto := .F.
+
+    //Busca registros com status recebido
+    BeginSQL Alias "TMPZKD"
+        SELECT 
+            ZKD.R_E_C_N_O_ AS RECNO 
+        FROM 
+            %Table:ZKD% ZKD 
+        WHERE 
+            ZKD.%NotDel%
+            // AND ZKD.ZKD_TIPO = 'NFE' // Para testes, processa os registros com status erro
+            // AND ZKD.ZKD_VIEW <> ''
+            // AND ZKD.ZKD_STATUS = 'R'
+            // AND ZKD.ZKD_DATA = '20260607'
+			AND ZKD.ZKD_ID = '27260408489643000586650240000031311000031328'
+    EndSQL
+
+    // Laço para processar os registros
+    While !TMPZKD->(Eof())
+        ZKD->(DbGoTo(TMPZKD->RECNO))// Posiciona o ponteiro na tabela ZKD
+
+		// Reseta as variaveis
+		lOk := .F.; cMsgError := ""; aSL1 := {}; aSL2 := {}; aSL4 := {}; aSC5 := {}; aSC6 := {}
+
+	    If ZKD->(Recno()) == TMPZKD->RECNO
+			// Interpreta o JSON e XML    
+	        cErro := oJson:FromJson(ZKD->ZKD_JSON)
+			oXml := XmlParser(ZKD->ZKD_XML, "_", @cError, @cWarning)
+			oFinanceiro:FromJson(ZKD->ZKD_VIEW)
+
+			// Busca itens do JSON
+			If oJson:Hasproperty("items")
+				aItens := oJson['items']
+			Else
+				aItens := {}
+				cMsgError +=  "Itens não encontrados no JSON do documento [" + cNumDoc + "]."+CRLF
+			EndIf
+
+			// Posiciona no cliente
+			SA1->(DbSetOrder(3))//A1_FILIAL+A1_CGC
+			SA1->(DbSeek(xFilial("SA1")+ZKD->ZKD_CGC))
+			
+            // Valida json
+			If Empty(cErro)
+				// Valida se encontrou a view financeira para pelo menos um item
+				// If oFinanceiro != Nil
+				// Nota
+				If oJson:Hasproperty("invoiceNumber")
+					cNumDoc := PADL(oJson["invoiceNumber"],TamSX3("F2_DOC")[1],"0")
+				ElseIf oJson:Hasproperty("receiptSequence")
+					cNumDoc := PADL(oJson["receiptSequence"],TamSX3("F2_DOC")[1],"0")
+				ElseIF ValType(oXml:_NFEPROC:_NFE:_INFNFE:_IDE:_CNF:TEXT) == "C"
+					cNumDoc := oXml:_NFEPROC:_NFE:_INFNFE:_IDE:_CNF:TEXT
+				Else
+					cNumDoc := ""
+				EndIf
+				// Série
+				If oJson:Hasproperty("serie")
+					cSerie  := oJson["serie"]
+				ElseIf oJson:Hasproperty("cashRegisterNumber")
+					cSerie  := oJson["cashRegisterNumber"]
+				ElseIF ValType(oXml:_NFEPROC:_NFE:_INFNFE:_IDE:_SERIE:TEXT) == "C"
+					cSerie := oXml:_NFEPROC:_NFE:_INFNFE:_IDE:_SERIE:TEXT
+				Else
+					cSerie := ""
+				EndIf
+				// Data de emissão
+				If oJson:Hasproperty("emissionDate")
+					dEmissao := STOD(SubStr(oJson["emissionDate"],1,4) + SubStr(oJson["emissionDate"],6,2) + SubStr(oJson["emissionDate"],9,2))
+				ElseIf oJson:Hasproperty("saleDate")
+					dEmissao := STOD(SubStr(oJson["saleDate"],1,4) + SubStr(oJson["saleDate"],6,2) + SubStr(oJson["saleDate"],9,2))
+				ElseIf ValType(oXml:_NFEPROC:_NFE:_INFNFE:_IDE:_DHEMI:TEXT) == "C"
+					dEmissao := STOD(StrTran(SubStr(oXml:_NFEPROC:_NFE:_INFNFE:_IDE:_DHEMI:TEXT,1,10),"-",""))
+				EndIf
+
+				// Montar as SLs de itens, formas de pagamento e o cabeçalho da venda
+				IF !Empty(cNumDoc) .and. !Empty(cSerie) //.and. lCliente
+					// Trata diferente para NFE e NFCe
+					If AllTrim(ZKD->ZKD_TIPO) == "NFE"
+						// Monta cabeçalho do pedido
+						montaSC5(oFinanceiro)
+						// Monta itens do pedido
+						montaSC6(aItens)
+						lOk := .t.
+					Else
+						//Monta itens do Orçamento
+						If montaSL2(aItens)
+							//Monta Condição Negociada do Orçamento
+							If montaSL4(oJson,oXml,oFinanceiro)
+								//Monta cabeçalho do Orçamento
+								If montaSL1(oJson,oXml)
+									lOk := .t.
+								EndIf
+							EndIf
+						EndIf
+					EndIf
+				Else
+					cMsgError += "Não foi encontrado informção da NF da chave: " + ZKD->ZKD_ID + " para o documento [" + cNumDoc + "]."+CRLF
+				EndIf     
+				// Else
+				// 	cMsgError += "Nenhuma view financeira encontrada para os itens do documento [" + cNumDoc + "]."+CRLF
+				// EndIf      
+            Else
+                cMsgError += "Erro ao interpretar o JSON do documento [" + cNumDoc + "]: " + cErro + CRLF
+            EndIf
+        EndIf
+		//Processa integração
+		StartJob("U_processaIntegracao", GetEnvServer(), .t., cEmpAnt,ZKD->ZKD_FILDES,ZKD->(Recno()),aSC5,aSC6,aSL1,aSL2,aSL4,lOk,cMsgError,cNumDoc,cSerie) 
+        TMPZKD->(DbSkip())
+    EndDo
+    TMPZKD->(DbCloseArea())    
+Return
+
+// Monta SL2 de itens
+Static Function montaSL2(aItens)
+    Local nX        := 0
+    Local aRow      := {}
+    Local cPrdCod   := ""
+	Local lRet 		:= .F.
+
+    nVlrMerc := 0	
+
+    For nX := 1 To Len(aItens)
+		lRet := .F.
+		cPrdCod := AllTrim(Str(aItens[nX]['productId']))
+
+		//Valida se produto existe
+        DbSelectArea("SB1")
+	    SB1->(DbSetOrder(1))
+		IF SB1->(!DbSeek(xFilial("SB1") + cPrdCod))
+			cMsgError += "Produto [" + AllTrim(cPrdCod) + "] do documento [" + cNumDoc + "] nao encontrado na base."+CRLF
+			Return lRet
+		ENDIF
+
+		// Monta dados do item
+		nQtd        := aItens[nX]["quantity"]
+		nVlrUnit    := aItens[nX]["unitValue"]
+		nVlrItem    := aItens[nX]["totalValue"]
+		cCFOP       := aItens[nX]["cfop"]
+		cItem       := StrZero(nX, TamSX3("L2_ITEM")[1])
+		cTES        := MaTesInt(2, "03", SA1->A1_COD, SA1->A1_LOJA, "C", SB1->B1_COD, NIL)
+		IF Empty(cTES)
+			cTES := "503"
+		EndIF
+
+		nVlrMerc += nVlrItem
+
+		aRow := {}
+		Aadd(aRow, {"L2_PRODUTO"	, SB1->B1_COD	, Nil})
+		Aadd(aRow, {"L2_ITEM"		, cItem			, Nil})
+		Aadd(aRow, {"L2_DESCRI"		, SB1->B1_DESC	, Nil})
+		Aadd(aRow, {"L2_QUANT"		, nQtd			, Nil})
+		Aadd(aRow, {"L2_PRCTAB"		, nVlrUnit		, Nil})
+		Aadd(aRow, {"L2_DESC"		, 0				, Nil})//TODO: Buscar nas views
+		Aadd(aRow, {"L2_VALDESC"	, 0				, Nil})//TODO: Buscar nas views
+		Aadd(aRow, {"L2_VLRITEM"	, nVlrItem		, Nil})
+		Aadd(aRow, {"L2_VRUNIT"		, nVlrUnit		, Nil})
+		Aadd(aRow, {"L2_UM"			, SB1->B1_UM	, Nil})
+		Aadd(aRow, {"L2_EMISSAO"	, dEmissao	, Nil})
+		//Aadd(aRow, {"L2_TABELA"	, "001"			, Nil})
+		Aadd(aRow, {"L2_LOCAL"		, "01"			, Nil})
+		//Aadd(aRow, {"L2_ENTREGA"	, "2"			, Nil})
+		Aadd(aRow, {"L2_TES"		, cTES			, Nil})
+		Aadd(aRow, {"L2_CF"			, cCFOP			, Nil})
+		//Aadd(aSL2,{"L2_VALIPI"	, nValIPIIT		, Nil})
+
+		Aadd(aSL2, aRow)
+		lRet := .t.
+	Next nX
+Return lRet
+
+// Busca descrição do pagamento para achar a administradora
+Static Function montaSL4(oJson,oXml,oFinanceiro)
+    Local nX 		:= 0
+	Local cDscPagto := ""
+	Local cCardDsc 	:= ""
+	Local dDataVencimento := CToD("")
+	Local lRet 		:= .f.
+
+	//Pega a descrição do pagamento
+	If oFinanceiro <> Nil .and. oFinanceiro:Hasproperty("financeiro")
+		For nX := 1 to Len(oFinanceiro["financeiro"])
+			cDscPagto := oFinanceiro["financeiro"][nX]["descricao_pagamento"]
+			dDataVencimento := SToD(StrTran(oFinanceiro["financeiro"][nX]["vencimento"],'/',''))
+			// rotina que monta o array
+			lRet := procSL4(oJson,oFinanceiro["financeiro"][nX]["valor_parcela"],cDscPagto,dDataVencimento)
+		Next
+	ElseIf oJson <> Nil
+		If oJson:Hasproperty("payments")
+			For nX := 1 to Len(oJson["payments"])
+				If oJson["payments"][nX]:Hasproperty("paymentMethodDescription")
+					cDscPagto := AllTrim(oJson["payments"][nX]["paymentMethodDescription"])
+					If oJson["payments"][nX]:Hasproperty("cardFlagDescription")
+						If oJson["payments"][nX]["cardFlagDescription"] <> Nil
+							cCardDsc := oJson["payments"][nX]["cardFlagDescription"]
+						EndIf
+						If Empty(cCardDsc)
+							If oJson:Hasproperty("channelDescription")//Tratamento para "WHATSAPP OFICIAL (0800)"
+								If oJson["channelDescription"] <> Nil
+									cCardDsc := AllTrim(oJson["channelDescription"])
+								EndIf
+							EndIf
+						EndIf
+						cDscPagto += " - " + cCardDsc
+					EndIf
+					// rotina que monta o array
+					lRet := procSL4(oJson,oJson["payments"][nX]["value"],cDscPagto,dDataVencimento)
+				EndIf
+			Next
+		EndIf
+	EndIf
+Return lRet
+
+// Monta SL4 de formas de pagamento
+Static Function procSL4(oJson,nValorParcela,cDscPagto,dDataVencimento)
+	Local aRow      := {}
+	Local aFormaID	:= {}
+	Local cFrmPagto	:= ""
+	Local cAdmFin 	:= ""
+	Local cNSUTef 	:= ""
+	Local cAutoriz	:= ""
+	Local cFormaID 	:= ""
+	Local cVendTef 	:= ""
+	Local cTpDoc 	:= ""
+	Local nValor 	:= 0
+	Local nP 		:= 0
+	Local nX		:= 0
+	Local lRet 		:= .f.
+
+	Default cDscPagto := ""
+	Default dDataVencimento := CToD("")
+
+	If Empty(cDscPagto)
+		cMsgError += "Descição da forma de pagamento não encontrado [" + cTpDoc + "]"+CRLF
+		Return lRet
+	Else
+		cDscPagto := UPPER(cDscPagto)
+	EndIf
+	
+	cTpDoc	:= IIF(AllTrim(ZKD->ZKD_TIPO) == "NFE", "NFE", "NFC")
+
+	DbSelectArea("SZE")
+	SZE->(DbSetOrder(4))	// ZE_FILIAL+ZE_TPDOC+ZE_XDSCXLS+ZE_ADMFIN
+	IF SZE->(!DbSeek(xFilial("SZE") + cTpDoc + cDscPagto))
+		cMsgError += "Forma de pagamento nao relacionada na SZE: [" + cTpDoc + "/" + cDscPagto + "]"+CRLF
+		Return lRet
+	EndIF
+
+	DbSelectArea("SAE")
+	SAE->(DbSetOrder(1))	// AE_FILIAL+AE_COD
+	IF SAE->(!DbSeek(xFilial("SAE") + SZE->ZE_ADMFIN))
+		cMsgError += "Adminstradora financeira nao encontrada: [" + SZE->ZE_ADMFIN + "]"+CRLF
+		Return lRet
+	EndIF
+
+	//
+	cAdmFin 	:= AllTrim(SAE->AE_COD) + " - " + AllTrim(SAE->AE_DESC)
+	cFrmPagto 	:= AllTrim(SAE->AE_TIPO)
+	If oJson:Hasproperty('payments')
+		For nX := 1 to Len(oJson['payments'])
+			// IF oJson['payments'][nX]:Hasproperty('value')
+			// 	nValor 		:= oJson['payments'][nX]['value']
+			// EndIf
+			//
+			IF oJson['payments'][nX]:Hasproperty('nsu') .and. oJson['payments'][nX]:Hasproperty('authorizationNsu')
+				IF cFrmPagto $ "CC,CD"
+					//
+					cNSUTef 	:= oJson['payments'][nX]['nsu']
+					cAutoriz	:= oJson['payments'][nX]['authorizationNsu']
+					cVendTef	:= "S"
+
+					//
+					IF !Empty(aFormaID) .And. (nP := Ascan(aFormaID, {|x| x[1] == cFrmPagto .And. x[2] == cNSUTef .And. x[3] == cAutoriz})) > 0
+						cFormaID := CValToChar(nP)
+					Else
+						Aadd(aFormaID, {cFrmPagto, cNSUTef, cAutoriz})
+						cFormaID := CValToChar(Len(aFormaID))
+					EndIF
+				Else
+					//
+					cNSUTef 	:= ""
+					cAutoriz	:= ""
+					cFormaID 	:= ""
+					cVendTef	:= ""
+				EndIF
+			EndIF
+		Next
+	EndIf
+	nValor 		:= nValorParcela
+	nVlrTot 	+= nValor
+
+	//
+	aRow := {}
+
+	// Caso ja exista a forma de pagamento dinheir, entao ele soma, pq encontramos situacoes de vir mais de uma vez
+	IF cFrmPagto $ "R$" .And. !Empty(aSL4) .And. (nP := Ascan(aSL4, {|x| x[1][2] == "R$"})) > 0
+		aSL4[nP][3][2] += nValor
+	Else
+		//
+		//Aadd(aRow, {"L4_FILIAL"	, xFilial("SL4")})
+		Aadd(aRow, {"L4_FORMA"		, cFrmPagto})					// 1
+		Aadd(aRow, {"L4_DATA"		, dDataVencimento})				// 2 
+		Aadd(aRow, {"L4_VALOR"		, nValor})						// 3
+		Aadd(aRow, {"L4_FORMAID"	, cFormaID})					// 4
+		Aadd(aRow, {"L4_ADMINIS"	, cAdmFin})						// 5
+		Aadd(aRow, {"L4_DOCTEF"		, cNSUTef})						// 6
+		Aadd(aRow, {"L4_AUTORIZ"	, cAutoriz})					// 7
+		Aadd(aRow, {"L4_NSUTEF"		, cNSUTef})						// 8
+		Aadd(aRow, {"L4_VENDTEF"	, cVendTef})					// 9
+	EndIF
+
+	IF cFrmPagto == "R$"
+		nVlrDI += nValor
+	ElseIF cFrmPagto == "CC"
+		nVlrCC += nValor
+	ElseIF cFrmPagto == "CD"
+		nVlrCD += nValor
+	ElseIF cFrmPagto == "FI"
+		nVlrFI += nValor
+	ElseIF cFrmPagto == "CH"
+		nVlrCH += nValor
+	ElseIF cFrmPagto == "CO"
+		nVlrCO += nValor
+	ElseIF cFrmPagto == "BOL"
+		nVlrBO += nValor
+	ElseIF cFrmPagto == "VA"
+		nVlrVA += nValor
+	ElseIF cFrmPagto == "PIX"
+		nVlrPX += nValor
+	Else
+		nVlrOU += nValor
+	EndIF
+
+	IF !Empty(aRow)
+		Aadd(aSL4, aRow)
+		lRet := .t.
+	EndIF
+Return lRet
+
+Static Function montaSL1(oJson,oXml)
+	Local cHora     	:= ""
+	Local cKeyNFCE 		:= ZKD->ZKD_ID
+	Local cProtocolo	:= ""
+	Local cStatus 		:= ""
+	Local cMotivo 		:= ""
+	Local cRetSefaz		:= ""//AllTrim(cProtocolo) + "|" + AllTrim(cStatus) + "|" + AllTrim(cMotivo)
+	Local nPrcDsc 		:= 0
+	Local nVlrDes 		:= 0
+
+	If oJson:Hasproperty('updatedAt')
+		If Valtype(oJson["updatedAt"]) == "C"
+			cHora := SubStr(oJson["updatedAt"],12,8)
+		EndIf
+	ElseIf oJson:Hasproperty('receiptOpeningDateTime')
+		If Valtype(oJson["receiptOpeningDateTime"]) == "C"
+			cHora := SubStr(oJson["receiptOpeningDateTime"],12,8)
+		EndIf
+	EndIf
+	If ValType(oXML:_NFEPROC:_PROTNFE:_INFPROT:_NPROT:Text) == "C"
+		cProtocolo := oXML:_NFEPROC:_PROTNFE:_INFPROT:_NPROT:Text 
+	EndIf
+	If ValType(oXML:_NFEPROC:_PROTNFE:_INFPROT:_CSTAT:Text) == "C"
+		cStatus := oXML:_NFEPROC:_PROTNFE:_INFPROT:_CSTAT:Text 
+	EndIf
+	If ValType(oXML:_NFEPROC:_PROTNFE:_INFPROT:_XMOTIVO:Text) == "C"
+	 	cMotivo := oXML:_NFEPROC:_PROTNFE:_INFPROT:_XMOTIVO:Text 
+	EndIf
+
+	cRetSefaz := AllTrim(cProtocolo) + "|" + AllTrim(cStatus) + "|" + AllTrim(cMotivo)
+
+	//Valor desconto
+	nVlrDes := nVlrMerc/*montaSl2*/ - nVlrTot/*montaSl4*/
+
+	IF nVlrDes > 0
+		nPrcDsc := (nVlrDes / nVlrMerc) * 100
+		nPrcDsc := Round(nPrcDsc, 2)
+	EndIF
+	
+	//
+	IF nPrcDsc < 0 .Or. nPrcDsc > 99.99
+		cMsgError += "Percentual do desconto invalido: [" + AllTrim(Transform(nPrcDsc, "@E 999.99")) + "]"+CRLF
+		Return .F.
+	EndIF
+
+    //Valida a estacao/serie
+    DbSelectArea("SLG")
+	SLG->(DbSetOrder(1))				// LG_FILIAL+LG_CODIGO
+    IF SLG->(!DbSeek(ZKD->ZKD_FILDES + PADL(cSerie,3,"0")))
+		cMsgError +=  "Estacao nao cadastrada p/ a serie [" + PADL(cSerie,3,"0") + "] para a filial [" + ZKD->ZKD_FILDES + "]!" + CRLF
+		Return .F.
+	EndIF
+
+    //valida a estacao
+	IF Empty(SLG->LG_XCAIXA)
+		cMsgError += "Caixa nao cadastrado p/ a Estacao/Serie [" + SLG->LG_CODIGO + "/" + PADL(cSerie,3,"0") + "]!" + CRLF
+		Return .F.
+	EndIF
+
+	//Valida se o caixa existe
+    DbSelectArea("SA6")
+	SA6->(DbSetOrder(1))				// A6_FILIAL+A6_COD+A6_AGENCIA+A6_NUMCON
+	IF SA6->(!DbSeek(xFilial("SA6") + SLG->LG_XCAIXA))
+		cMsgError += "Caixa nao existente p/ a Estacao/Serie [" + SLG->LG_CODIGO + "/" + cSerie + "]!" + CRLF
+		Return .F.
+	EndIF
+
+	//
+	//Aadd(aSL1, {"L1_FILIAL"	, cFilAnt           , Nil})
+	Aadd(aSL1, {"L1_IMPRIME"	, "1N"              , Nil})
+	Aadd(aSL1, {"L1_CONFVEN"	, "SSSSSSSSNSSS"    , Nil})
+	Aadd(aSL1, {"L1_EMISSAO"	, dEmissao		, Nil})
+	Aadd(aSL1, {"L1_EMISNF"	, dEmissao		, Nil})
+	Aadd(aSL1, {"L1_DTLIM"	, dEmissao		, Nil})
+	Aadd(aSL1, {"L1_HORA"		, cHora			    , Nil})
+	Aadd(aSL1, {"L1_CLIENTE"	, SA1->A1_COD		, Nil})
+	Aadd(aSL1, {"L1_LOJA"		, SA1->A1_LOJA		, Nil})
+	Aadd(aSL1, {"L1_XORIGEM"	, "ULOJE002"			, Nil})
+	Aadd(aSL1, {"L1_VEND"		, "000000"		    , Nil})//TODO: verificar com equipe de negocio se vem o vendedor ou se é um vendedor padrão
+	Aadd(aSL1, {"L1_DOC"		, cNumDoc		    , Nil})
+	Aadd(aSL1, {"L1_SERIE"	, cSerie		    , Nil})
+	Aadd(aSL1, {"L1_KEYNFCE"	, cKeyNFCE		    , Nil})
+	// Aadd(aSL1, {"L1_XCODSZC"	, ::cCodSZC		    , Nil})
+	Aadd(aSL1, {"L1_DINHEIR"	, nVlrDI			, Nil})
+	Aadd(aSL1, {"L1_FINANC"	, nVlrFI			, Nil})
+	Aadd(aSL1, {"L1_CARTAO"	, nVlrCC			, Nil})
+	Aadd(aSL1, {"L1_CHEQUES"	, nVlrCH			, Nil})
+	Aadd(aSL1, {"L1_VLRDEBI"	, nVlrCD			, Nil})
+	Aadd(aSL1, {"L1_VLRPGDG"	, nVlrPD			, Nil})
+	Aadd(aSL1, {"L1_VLRPGPX"	, nVlrPX			, Nil})
+	Aadd(aSL1, {"L1_CREDITO"	, 0					, Nil})
+	Aadd(aSL1, {"L1_CONVENI"	, 0					, Nil})
+	Aadd(aSL1, {"L1_VALES"	, nVlrVA			, Nil})
+	Aadd(aSL1, {"L1_ENTRADA"	, 0					, Nil})
+	Aadd(aSL1, {"L1_VLRTOT"	, nVlrTot			, Nil})
+	Aadd(aSL1, {"L1_VALBRUT"	, nVlrTot			, Nil})
+	Aadd(aSL1, {"L1_VALMERC"	, nVlrMerc		, Nil})
+	Aadd(aSL1, {"L1_VLRLIQ"	, nVlrTot			, Nil})
+	Aadd(aSL1, {"L1_SITUA"	, "RX"				, Nil})
+	Aadd(aSL1, {"L1_PDV"		, SLG->LG_PDV		, Nil}) //TODO: verificar com equipe de negocio se vem a estaçao 
+	Aadd(aSL1, {"L1_TIPOCLI"	, SA1->A1_TIPO		, Nil})
+	Aadd(aSL1, {"L1_TIPO"		, "V"				, Nil})
+	Aadd(aSL1, {"L1_CONDPG"	, "CN"				, Nil})
+	Aadd(aSL1, {"L1_NUMCFIS"	, cNumDoc			, Nil})
+	Aadd(aSL1, {"L1_CGCCLI"	, SA1->A1_CGC		, Nil})
+	Aadd(aSL1, {"L1_TPORC"	, "E"				, Nil})
+	Aadd(aSL1, {"L1_OPERADO"	, SA6->A6_COD		, Nil})
+	Aadd(aSL1, {"L1_RETSFZ"	, cRetSefaz			, Nil})
+	Aadd(aSL1, {"L1_ESTACAO"	, SLG->LG_CODIGO	, Nil})
+	Aadd(aSL1, {"L1_DESCONT"	, nVlrDes			, Nil})
+	Aadd(aSL1, {"L1_DESCNF"	, nPrcDsc			, Nil})
+	//Aadd(aSL1, {"L1_TRANSP"	, cCodTran			, Nil})
+	//Aadd(aSL1, {"L1_PARCELA", nTotalParc		, Nil})
+	//Aadd(aSL1, {"L1_DESPESA", nJurCar			, Nil})
+
+Return .T.
+
+Static Function montaSC5(oFinanceiro)
+	Local cCondPag := retCond(oFinanceiro)
+	cDoc := GetSxeNum("SC5", "C5_NUM",,,,ZKD->ZKD_FILDES)
+	SC5->(DbSetOrder(1))
+	While SC5->(DbSeek(ZKD->ZKD_FILDES+cDoc))
+		ConfirmSx8()
+		cDoc := GetSxeNum("SC5", "C5_NUM",,,,ZKD->ZKD_FILDES)
+	EndDo
+	aSC5   := {}
+	aadd(aSC5, {"C5_NUM"    , cDoc     		, Nil})
+	aadd(aSC5, {"C5_TIPO"   , "N"      		, Nil})
+	aadd(aSC5, {"C5_CLIENTE", SA1->A1_COD   , Nil})
+	aadd(aSC5, {"C5_LOJACLI", SA1->A1_LOJA  , Nil})
+	aadd(aSC5, {"C5_LOJAENT", SA1->A1_LOJA  , Nil})
+	aadd(aSC5, {"C5_CONDPAG", cCondPag 		, Nil})
+	aadd(aSC5, {"C5_LIBEROK", "S"  			, Nil})
+          
+Return .T.
+
+Static Function montaSC6(aItens)
+	Local aLinha    := {}                             
+	Local nX        := 0
+    Local cPrdCod   := ""
+
+	aSC6 := {}
+	
+	For nX := 1 To Len(aItens)  //Quantidade de Itens
+
+		cPrdCod := AllTrim(Str(aItens[nX]['productId']))
+
+		//Valida se produto existe
+        DbSelectArea("SB1")
+	    SB1->(DbSetOrder(1))
+		IF SB1->(!DbSeek(xFilial("SB1") + cPrdCod))
+			cMsgError += "Produto [" + AllTrim(cPrdCod) + "] do documento [" + cNumDoc + "] nao encontrado na base."+CRLF
+			Return .F.
+		ENDIF
+
+		// Monta dados do item
+		nQtd        := aItens[nX]["quantity"]
+		nVlrUnit    := aItens[nX]["unitValue"]
+		nVlrItem    := aItens[nX]["totalValue"]
+		cCFOP       := aItens[nX]["cfop"]
+		cItem       := StrZero(nX, TamSX3("L2_ITEM")[1])
+		cTES        := MaTesInt(2, "03", SA1->A1_COD, SA1->A1_LOJA, "C", SB1->B1_COD, NIL)
+		IF Empty(cTES)
+			cTES := "503"
+		EndIF
+
+		aLinha := {}
+		aadd(aLinha,{"C6_ITEM"   , StrZero(nX,2), Nil})
+		aadd(aLinha,{"C6_PRODUTO", cPrdCod      , Nil})
+		aadd(aLinha,{"C6_QTDVEN" , nQtd         , Nil})
+		aadd(aLinha,{"C6_QTDLIB" , nQtd         , Nil})
+		aadd(aLinha,{"C6_PRCVEN" , nVlrUnit     , Nil})
+		aadd(aLinha,{"C6_PRUNIT" , nVlrUnit     , Nil})
+		aadd(aLinha,{"C6_VALOR"  , nVlrItem     , Nil})
+		aadd(aLinha,{"C6_TES"    , cTES       	, Nil})
+		aadd(aSC6, aLinha)
+	Next nX				
+Return .T.
+
+User Function processaIntegracao(cEmpZKD,cFilZKD,nRecZKD,aSC5,aSC6,aSL1,aSL2,aSL4,lOk,cMsgError,cNumDoc,cSerie)
+	Local aMsg 				:= {}
+	Local aRet 				:= {}
+	Private cHVF2DOC 		:= ""
+	Private cHVF2SERIE 		:= ""
+	Private nRecnoZKD 		:= 0
+	Default cNumDoc 		:= ""
+	Default cSerie 			:= ""
+	Default nRecZKD 		:= 0
+	// Seta o novo ambiente
+	RpcSetEnv(cEmpZKD,cFilZKD)
+	// Preenche campos de documento, série e recno zkd que serão usados no PE de faturamento
+	cHVF2DOC 				:= PadR(cNumDoc, TamSX3("F2_DOC")[1])
+	cHVF2SERIE 				:= PadR(cSerie, TamSX3("F2_SERIE")[1])
+	nRecnoZKD 				:= nRecZKD
+	// Posiciona novamente na tabela de processamento
+	ZKD->(DbGoTo(nRecZKD))
+	
+	If lOk
+		If AllTrim(ZKD->ZKD_TIPO) == "NFE"// Chama processo de integração para NFE	
+			// Execauto da criação do pedido de venda
+			lMsErroAuto := .F.
+			MSExecAuto({|a, b, c, d| MATA410(a, b, c, d)}, aSC5, aSC6, 3, .F.)
+			Sleep(100000)
+			// Verifica se houve erro no processo de automação
+			If !lMsErroAuto
+				ConOut("Incluido com sucesso! Pedido : " + SC5->C5_NUM)
+				ConfirmSx8()
+			Else
+				ConOut("Erro na inclusao!")
+				aMsg := GetAutoGRLog()
+			EndIf  
+		Else // Chama processo de integração para NFCe ou Orçamento
+			aSL1 := FWVetByDic(aSL1, "SL1")
+			aSL2 := FWVetByDic(aSL2, "SL2", .T.)
+			aSL4 := FWVetByDic(aSL4, "SL4", .T.)
+
+			aRet := Lj7GrvOrc(aSL1, aSL2, aSL4, .F./*lTela*/, .T./*lGeraNumOrc*/,/*cFilOrc*/,/*lJob*/,/*lAlteraPrc*/)
+
+			IF aRet[1]
+				If RecLock('ZKD',.F.)
+					ZKD->ZKD_STATUS := "P"
+					ZKD->ZKD_HIST := AllTrim(ZKD->ZKD_HIST)  +Chr(13) + Chr(10)+"--------"+DTOC(Date())+" "+SubStr(Time(),1,8)+"--------"+Chr(13) + Chr(10)+"Foi criado o orçamento: " + aRet[2]
+					ZKD->(MsUnlock())
+				EndIf
+				ConOut("Foi criado o orçamento: " + aRet[2])
+				lRet := .T.
+			Else
+				//DisarmTransaction()
+				ConOut("Falha na geracao do orçamento")
+			EndIF
+		EndIf
+	Else
+		If RecLock('ZKD',.F.)
+			ZKD->ZKD_STATUS := "E"
+			ZKD->ZKD_HIST := AllTrim(ZKD->ZKD_HIST)  +Chr(13) + Chr(10)+"--------"+DTOC(Date())+" "+SubStr(Time(),1,8)+"--------"+Chr(13) + Chr(10)+cMsgError
+			ZKD->(MsUnlock())
+		EndIf
+	EndIf
+Return .T.
+
+Static Function retCond(oFinanceiro)
+	Local cCondPag 		:= ""
+	Local nX 			:= 0
+	Local nParcelas 	:= 0
+	Local cAliasSE4     := GetNextAlias()
+
+	If oFinanceiro <> Nil
+		If oFinanceiro:Hasproperty("financeiro")
+			For nX := 1 to Len(oFinanceiro["financeiro"])
+				cDscPagto := oFinanceiro["financeiro"][nX]["descricao_pagamento"]
+				nParcelas++
+			Next
+		EndIf
+	EndIf
+	If !Empty(cDscPagto)
+		cDscPagto := "%E4_XFMPGTO LIKE '%" + cDscPagto + "%'%" 
+		If Select(cAliasSE4) <> 0
+			(cAliasSE4)->(DbCloseArea())
+		EndIf
+		
+		BeginSql alias cAliasSE4
+			Select * from %Table:SE4% 
+			Where E4_FILIAL = %Exp:xFilial('SE4')%
+				and %Exp:cDscPagto%
+				and E4_XPARCEL = %Exp:AllTrim(CValToChar(nParcelas))%
+			  	and %notDel%
+		EndSql
+		
+		If (cAliasSE4)->(!EOF())
+			cCondPag := (cAliasSE4)->E4_CODIGO
+		EndIf
+		(cAliasSE4)->(DbCloseArea())
+	EndIf
+		
+Return cCondPag
+
+User Function JLOJE002()
+    ConOut("[JLOJE002] Prerando ambiente.")
+    RpcSetEnv("01","010101")
+    ConOut("[JLOJE002] Ambiente configurado "+cFilAnt+".")
+    U_ULOJE002()
+Return

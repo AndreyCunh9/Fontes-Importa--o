@@ -1,0 +1,459 @@
+﻿{
+  "version": "1.0.0",
+  "categories": {
+    "spec-driven-development": {
+      "name": "Spec-Driven Development",
+      "description": "Skills for structured, spec-driven development workflows in Protheus"
+    },
+    "migration": {
+      "name": "Migration and Modernization",
+      "description": "Skills for migrating and modernizing AdvPL code to TLPP and newer Protheus patterns"
+    },
+    "quality": {
+      "name": "Code Quality and Review",
+      "description": "Skills for code review, refactoring, SQL quality, and encoding compliance"
+    },
+    "planning": {
+      "name": "Documentation and Planning",
+      "description": "Skills for context mapping, implementation planning, and ProtheusDOC documentation"
+    },
+    "documentation": {
+      "name": "Documentation",
+      "description": "Skills for querying the TOTVS Protheus ERP data dictionary"
+    },
+    "code-generation": {
+      "name": "Code Generation",
+      "description": "Skills for generating Protheus MVC screens, REST endpoints, entry points, and FWRest clients"
+    },
+    "testing": {
+      "name": "Testing",
+      "description": "Skills for generating TIR end-to-end test scripts for Protheus screens"
+    },
+    "superpowers": {
+      "name": "Superpowers",
+      "description": "Meta-workflow skills for orchestrating agents, planning, debugging, and code review processes"
+    }
+  },
+  "skills": [
+    {
+      "name": "advpl-tlpp-sdd",
+      "description": "Plan and implement Protheus projects/features with 4 adaptive phases — Specify, Design, Tasks, Execute. Auto-sizes depth based on complexity. Creates atomic tasks with verification criteria, atomic commits, requirement traceability, and persistent memory across sessions. Specific to AdvPL/TLPP + Protheus. Use when: (1) Starting new Protheus projects, (2) Working on existing codebases (map modules, architecture, conventions), (3) Planning features (requirements, design, task breakdown), (4) Implementing with verification and atomic commits, (5) Quick tasks (bug fixes, entry points, config), (6) Tracking decisions/blockers/ideas across sessions, (7) Pausing/resuming work. Triggers on: 'initialize project', 'map codebase', 'specify feature', 'discuss feature', 'design', 'tasks', 'implement', 'validate', 'verify work', 'quick fix', 'pause work', 'resume work'.",
+      "category": "spec-driven-development",
+      "path": "advpl-tlpp/advpl-tlpp-sdd",
+      "files": [
+        "SKILL.md",
+        "references/brownfield-mapping.md",
+        "references/code-analysis.md",
+        "references/coding-principles.md",
+        "references/concerns.md",
+        "references/context-limits.md",
+        "references/design.md",
+        "references/discuss.md",
+        "references/implement.md",
+        "references/project-init.md",
+        "references/quick-mode.md",
+        "references/roadmap.md",
+        "references/session-handoff.md",
+        "references/specify.md",
+        "references/state-management.md",
+        "references/tasks.md",
+        "references/validate.md"
+      ],
+      "author": "Kael Thornwick",
+      "version": "1.1.0"
+    },
+    {
+      "name": "advpl-to-tlpp-migration",
+      "description": "Guide the migration of legacy AdvPL (Advanced Programming Language) code to modern TLPP (TOTVS Language Plus Plus). Covers feature comparison, syntax transformation, include/namespace adoption, typing, Try-Catch, REST migration, long identifiers, JSON inline, named parameters, access modifiers, and StaticCall removal. Use when user says 'migrate to TLPP', 'convert AdvPL', 'modernize .prw to .tlpp', 'add typing'.",
+      "category": "migration",
+      "path": "advpl-tlpp/advpl-to-tlpp-migration",
+      "files": [
+        "SKILL.md",
+        "references/advpl-tlpp-feature-comparison.md",
+        "references/tlpp-migration-patterns.md"
+      ],
+      "author": "Thalion Starforge",
+      "version": "4.1.0"
+    },
+    {
+      "name": "code-review",
+      "description": "Perform comprehensive AdvPL/TLPP code review covering SonarQube rules, Protheus.doc documentation, security, performance, clean code, and TOTVS Protheus framework best practices. Use when a user says \"review this code\", \"code review\", \"check this source\", \"audit this AdvPL/TLPP\", or needs a structured quality assessment of .prw/.tlpp/.prx files.",
+      "category": "quality",
+      "path": "advpl-tlpp/code-review",
+      "files": [
+        "SKILL.md",
+        "references/code-quality-patterns.md",
+        "references/documentation-and-conventions.md",
+        "references/security-review-patterns.md"
+      ],
+      "author": "Thalion Starforge",
+      "version": "4.2.0"
+    },
+    {
+      "name": "context-map",
+      "description": "Generate a context map of all files relevant to a task before implementing changes. Use when a user says \"map the codebase for this change\", \"what files are affected\", \"show me dependencies\", or before starting implementation to identify files to modify, dependencies, test files, and reference patterns.",
+      "category": "planning",
+      "path": "advpl-tlpp/context-map",
+      "files": [
+        "SKILL.md"
+      ],
+      "author": "Thalion Starforge",
+      "version": "4.1.0"
+    },
+    {
+      "name": "create-implementation-plan",
+      "description": "Create machine-readable implementation plan files for features, refactoring, upgrades, design, architecture, or infrastructure. Use when a user says \"create implementation plan\", \"plan this upgrade\", \"plan this refactor\", or needs a structured, phased plan with requirements, constraints, tasks, and validation criteria saved to the /plan/ directory.",
+      "category": "planning",
+      "path": "advpl-tlpp/create-implementation-plan",
+      "files": [
+        "SKILL.md"
+      ],
+      "author": "Thalion Starforge",
+      "version": "4.1.0"
+    },
+    {
+      "name": "data-dictionary-lookup",
+      "description": "Query the TOTVS Protheus ERP data dictionary (SX2 tables, SX3 fields, SIX indexes, SX6 parameters, SX5 generic tables, SX7 triggers, SX1 questions, SX9 relationships, SXB standard lookups, SXG/SXA groups). Use when the user asks 'what fields does SA1 have', 'what is the index of SE1', 'parameter MV_ESTADO', 'generic table 12', 'triggers for field A1_COD', 'standard lookup SA1', 'table structure', 'data dictionary'. Also use during refactoring, migration, or code improvements when dictionary impact validation is needed to confirm whether changes affect fields, triggers, indexes, parameters, or table relationships.",
+      "category": "documentation",
+      "path": "advpl-tlpp/data-dictionary-lookup",
+      "files": [
+        "SKILL.md",
+        "references/column-reference.md",
+        "references/sql-queries.md"
+      ],
+      "author": "Thalion Starforge",
+      "version": "4.1.0"
+    },
+    {
+      "name": "documentation-writer",
+      "description": "Generate ProtheusDOC comment blocks for AdvPL and TLPP source code. Use when a user says \"document this function\", \"add ProtheusDOC\", \"write documentation block\", \"document this class/method\", or needs structured source-code documentation following the Protheus.doc standard for functions, classes, methods",
+      "category": "planning",
+      "path": "advpl-tlpp/documentation-writer",
+      "files": [
+        "SKILL.md"
+      ],
+      "author": "Thalion Starforge",
+      "version": "4.1.0"
+    },
+    {
+      "name": "entry-point-designer",
+      "description": "Design and document Protheus Entry Points (Pontos de Entrada). Always generates TLPP by default; only generates AdvPL (.prw) when the user explicitly requests AdvPL. Covers User Function signatures, PARAMIXB parameter layouts, return value specifications, and ProtheusDOC documentation. Use when user says 'create entry point', 'ponto de entrada', 'PARAMIXB', 'User Function hook', 'ponto de entrada TLPP', 'ponto de entrada ADVPL'.",
+      "category": "code-generation",
+      "path": "advpl-tlpp/entry-point-designer",
+      "files": [
+        "SKILL.md",
+        "references/design-checklist.md",
+        "references/paramixb-and-returns.md",
+        "references/templates.md",
+        "references/troubleshooting.md"
+      ],
+      "author": "Thalion Starforge",
+      "version": "5.1.0"
+    },
+    {
+      "name": "fwrest-client-generator",
+      "description": "Generate AdvPL/TLPP code that CONSUMES external REST APIs using the FWRest client class. Covers GET, POST, PUT, DELETE verbs, header construction, query/path parameters, JSON body serialization, authentication (No Auth, HTTP Basic, Bearer Token/JWT, OAuth 2.0), timeout, SSL, status code handling, error treatment, and TLPP try/catch patterns. Use when user says 'consume REST API', 'call external API', 'FWRest', 'oRestClient', 'integrate with third-party API', 'HTTP client AdvPL', 'POST JSON Protheus', 'Bearer token AdvPL'.",
+      "category": "code-generation",
+      "path": "advpl-tlpp/fwrest-client-generator",
+      "files": [
+        "SKILL.md",
+        "references/fwrest-api-reference.md",
+        "references/fwrest-authentication-patterns.md",
+        "references/fwrest-client-templates.md"
+      ],
+      "author": "Thalion Starforge",
+      "version": "4.1.0"
+    },
+    {
+      "name": "mvc-generator",
+      "description": "Generate Protheus MVC (Model-View-Controller) screen structures including ModelDef, ViewDef, MenuDef, and BrowseDef functions. Supports single-entity (Modelo 1) and master-detail (Modelo 3) patterns with FWFormModel, FWFormView, FWFormBrowse, validations, triggers, and entry point hooks. Use when user says 'create MVC screen', 'ModelDef ViewDef', 'FWFormModel', 'master-detail screen'.",
+      "category": "code-generation",
+      "path": "advpl-tlpp/mvc-generator",
+      "files": [
+        "SKILL.md",
+        "references/mvc-api-reference.md",
+        "references/mvc-code-templates.md"
+      ],
+      "author": "Thalion Starforge",
+      "version": "4.1.0"
+    },
+    {
+      "name": "query-builder",
+      "description": "Build optimized and safe SQL queries for Protheus tables. Automatically includes mandatory filters (D_E_L_E_T_, branch), suggests appropriate indexes from SIX patterns, generates both Embedded SQL (preferring FWExecStatement) and Workarea (DBSelectArea/DBSeek) versions, and warns about common Protheus SQL pitfalls. Use when user says 'build query', 'SQL for Protheus table', 'FWExecStatement', 'TCQuery', 'Workarea vs SQL'.",
+      "category": "code-generation",
+      "path": "advpl-tlpp/query-builder",
+      "files": [
+        "SKILL.md",
+        "references/cross-database-compatibility.md",
+        "references/query-patterns-and-examples.md"
+      ],
+      "author": "Thalion Starforge",
+      "version": "4.2.0"
+    },
+    {
+      "name": "refactor",
+      "description": "Surgical code refactoring to improve maintainability without changing behavior. Covers extracting functions, renaming variables, breaking down god functions, improving type safety, eliminating code smells, and applying design patterns. Less drastic than repo-rebuilder; use for gradual improvements. Use when user says 'refactor this code', 'extract function', 'reduce complexity', 'code smells'.",
+      "category": "quality",
+      "path": "advpl-tlpp/refactor",
+      "files": [
+        "SKILL.md",
+        "references/code-smells-and-patterns.md"
+      ],
+      "author": "Thalion Starforge",
+      "version": "4.2.0"
+    },
+    {
+      "name": "refactor-method-complexity-reduce",
+      "description": "Refactor given method `${input:methodName}` to reduce its cognitive complexity to `${input:complexityThreshold}` or below, by extracting helper methods. Use when user says 'reduce complexity', 'simplify method', 'cognitive complexity too high'.",
+      "category": "quality",
+      "path": "advpl-tlpp/refactor-method-complexity-reduce",
+      "files": [
+        "SKILL.md"
+      ],
+      "author": "Thalion Starforge",
+      "version": "4.1.0"
+    },
+    {
+      "name": "sql-code-review",
+      "description": "Universal SQL code review assistant that performs comprehensive security, maintainability, and code quality analysis across SQL databases (PostgreSQL, SQL Server, Oracle). Focuses on SQL injection prevention, access control, code standards, and anti-pattern detection. Complements SQL optimization prompt for complete development coverage. Use when user says \"review SQL\", \"SQL security audit\", \"SQL anti-patterns\", \"check SQL quality\".",
+      "category": "quality",
+      "path": "advpl-tlpp/sql-code-review",
+      "files": [
+        "SKILL.md",
+        "references/database-specific-best-practices.md",
+        "references/sql-performance-and-quality-patterns.md",
+        "references/sql-security-patterns.md"
+      ],
+      "author": "Thalion Starforge",
+      "version": "4.2.0"
+    },
+    {
+      "name": "sql-optimization",
+      "description": "Universal SQL performance optimization assistant for comprehensive query tuning, indexing strategies, and database performance analysis across SQL databases (PostgreSQL, SQL Server, Oracle). Provides execution plan analysis, pagination optimization, batch operations, and performance monitoring guidance. Use when user says \"optimize SQL\", \"slow query\", \"index strategy\", \"execution plan analysis\".",
+      "category": "quality",
+      "path": "advpl-tlpp/sql-optimization",
+      "files": [
+        "SKILL.md",
+        "references/sql-optimization-patterns.md",
+        "references/sql-optimization.md"
+      ],
+      "author": "Thalion Starforge",
+      "version": "4.2.0"
+    },
+    {
+      "name": "tir-test-generator",
+      "description": "Generate TIR (TOTVS Interface Robot) end-to-end test scripts in Python for Protheus SmartClient/Webapp screens. Supports CRUD screen tests, MVC screen tests, grid interaction, report tests, field validation, and message box assertions. Use when a user says \"TIR test\", \"interface test\", \"e2e test Protheus\", \"SmartClient test\", \"Webapp test\", \"screen test\", \"create Python test for Protheus screen\", or \"automate Protheus UI test\".",
+      "category": "testing",
+      "path": "advpl-tlpp/tir-test-generator",
+      "files": [
+        "SKILL.md",
+        "references/tir-setup-and-best-practices.md",
+        "references/tir-test-patterns.md",
+        "references/tir-webapp-methods-reference.md"
+      ],
+      "author": "Thalion Starforge",
+      "version": "5.0.0"
+    },
+    {
+      "name": "tlpp-rest-endpoint-generator",
+      "description": "Generate TLPP REST endpoints using annotation-based routing (@Get, @Post, @Put, @Patch, @Delete) with the oRest object. Follows TOTVS API standards (TTALK) including pagination, error model, standard headers, and Swagger documentation. Use when user says 'create REST endpoint', 'TLPP REST', '@Get annotation', 'oRest endpoint'.",
+      "category": "code-generation",
+      "path": "advpl-tlpp/tlpp-rest-endpoint-generator",
+      "files": [
+        "SKILL.md",
+        "references/tlpp-rest-endpoint-templates.md",
+        "references/ttalk-standards-and-configuration.md"
+      ],
+      "author": "Thalion Starforge",
+      "version": "4.2.0"
+    },
+    {
+      "name": "utf8-to-cp1252-conversion",
+      "description": "Convert AdvPL/TLPP source files from UTF-8 encoding to Windows-1252 (CP1252) after code generation. The Protheus compiler only supports CP1252 encoded files — any source created or modified by an AI agent will be in UTF-8 and must be converted before compilation. Use when user says 'convert encoding', 'fix encoding', 'convert to CP1252', 'convert to Windows-1252', 'encoding conversion', 'fix file encoding', or after any code generation skill creates .prw/.prg/.tlpp/.prx files.",
+      "category": "quality",
+      "path": "advpl-tlpp/utf8-to-cp1252-conversion",
+      "files": [
+        "SKILL.md",
+        "scripts/convert-encoding.bat",
+        "scripts/convert-encoding.sh"
+      ],
+      "author": "Thalion Starforge",
+      "version": "4.1.0"
+    },
+    {
+      "name": "brainstorming",
+      "description": "You MUST use this before any creative work - creating features, building components, adding functionality, or modifying behavior. Explores user intent, requirements and design before implementation.",
+      "category": "superpowers",
+      "path": "superpowers/brainstorming",
+      "files": [
+        "SKILL.md"
+      ],
+      "author": "agent-skills",
+      "version": "1.0.0"
+    },
+    {
+      "name": "dispatching-parallel-agents",
+      "description": "Use when facing 2+ independent tasks that can be worked on without shared state or sequential dependencies",
+      "category": "superpowers",
+      "path": "superpowers/dispatching-parallel-agents",
+      "files": [
+        "SKILL.md"
+      ],
+      "author": "agent-skills",
+      "version": "1.0.0"
+    },
+    {
+      "name": "executing-plans",
+      "description": "Use when you have a written implementation plan to execute in a separate session with review checkpoints",
+      "category": "superpowers",
+      "path": "superpowers/executing-plans",
+      "files": [
+        "SKILL.md"
+      ],
+      "author": "agent-skills",
+      "version": "1.0.0"
+    },
+    {
+      "name": "finishing-a-development-branch",
+      "description": "Use when implementation is complete, all tests pass, and you need to decide how to integrate the work - guides completion of development work by presenting structured options for merge, PR, or cleanup",
+      "category": "superpowers",
+      "path": "superpowers/finishing-a-development-branch",
+      "files": [
+        "SKILL.md"
+      ],
+      "author": "agent-skills",
+      "version": "1.0.0"
+    },
+    {
+      "name": "receiving-code-review",
+      "description": "Use when receiving code review feedback, before implementing suggestions, especially if feedback seems unclear or technically questionable - requires technical rigor and verification, not performative agreement or blind implementation",
+      "category": "superpowers",
+      "path": "superpowers/receiving-code-review",
+      "files": [
+        "SKILL.md"
+      ],
+      "author": "agent-skills",
+      "version": "1.0.0"
+    },
+    {
+      "name": "requesting-code-review",
+      "description": "Use when completing tasks, implementing major features, or before merging to verify work meets requirements",
+      "category": "superpowers",
+      "path": "superpowers/requesting-code-review",
+      "files": [
+        "SKILL.md",
+        "code-reviewer.md"
+      ],
+      "author": "agent-skills",
+      "version": "1.0.0"
+    },
+    {
+      "name": "subagent-driven-development",
+      "description": "Use when executing implementation plans with independent tasks in the current session",
+      "category": "superpowers",
+      "path": "superpowers/subagent-driven-development",
+      "files": [
+        "SKILL.md",
+        "code-quality-reviewer-prompt.md",
+        "implementer-prompt.md",
+        "spec-reviewer-prompt.md"
+      ],
+      "author": "agent-skills",
+      "version": "1.0.0"
+    },
+    {
+      "name": "systematic-debugging",
+      "description": "Use when encountering any bug, test failure, or unexpected behavior, before proposing fixes",
+      "category": "superpowers",
+      "path": "superpowers/systematic-debugging",
+      "files": [
+        "SKILL.md",
+        "condition-based-waiting-example.ts",
+        "condition-based-waiting.md",
+        "CREATION-LOG.md",
+        "defense-in-depth.md",
+        "find-polluter.sh",
+        "root-cause-tracing.md",
+        "test-academic.md",
+        "test-pressure-1.md",
+        "test-pressure-2.md",
+        "test-pressure-3.md"
+      ],
+      "author": "agent-skills",
+      "version": "1.0.0"
+    },
+    {
+      "name": "test-driven-development",
+      "description": "Use when implementing any feature or bugfix, before writing implementation code",
+      "category": "superpowers",
+      "path": "superpowers/test-driven-development",
+      "files": [
+        "SKILL.md",
+        "testing-anti-patterns.md"
+      ],
+      "author": "agent-skills",
+      "version": "1.0.0"
+    },
+    {
+      "name": "using-git-worktrees",
+      "description": "Use when starting feature work that needs isolation from current workspace or before executing implementation plans - creates isolated git worktrees with smart directory selection and safety verification",
+      "category": "superpowers",
+      "path": "superpowers/using-git-worktrees",
+      "files": [
+        "SKILL.md"
+      ],
+      "author": "agent-skills",
+      "version": "1.0.0"
+    },
+    {
+      "name": "using-superpowers",
+      "description": "Use when starting any conversation - establishes how to find and use skills, requiring Skill tool invocation before ANY response including clarifying questions",
+      "category": "superpowers",
+      "path": "superpowers/using-superpowers",
+      "files": [
+        "SKILL.md"
+      ],
+      "author": "agent-skills",
+      "version": "1.0.0"
+    },
+    {
+      "name": "verification-before-completion",
+      "description": "Use when about to claim work is complete, fixed, or passing, before committing or creating PRs - requires running verification commands and confirming output before making any success claims; evidence before assertions always",
+      "category": "superpowers",
+      "path": "superpowers/verification-before-completion",
+      "files": [
+        "SKILL.md"
+      ],
+      "author": "agent-skills",
+      "version": "1.0.0"
+    },
+    {
+      "name": "writing-plans",
+      "description": "Use when you have a spec or requirements for a multi-step task, before touching code",
+      "category": "superpowers",
+      "path": "superpowers/writing-plans",
+      "files": [
+        "SKILL.md"
+      ],
+      "author": "agent-skills",
+      "version": "1.0.0"
+    },
+    {
+      "name": "writing-skills",
+      "description": "Use when creating new skills, editing existing skills, or verifying skills work before deployment",
+      "category": "superpowers",
+      "path": "superpowers/writing-skills",
+      "files": [
+        "SKILL.md",
+        "anthropic-best-practices.md",
+        "graphviz-conventions.dot",
+        "persuasion-principles.md",
+        "render-graphs.js",
+        "testing-skills-with-subagents.md",
+        "examples/CLAUDE_MD_TESTING.md"
+      ],
+      "author": "agent-skills",
+      "version": "1.0.0"
+    }
+  ]
+}

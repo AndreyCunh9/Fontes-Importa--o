@@ -1,0 +1,126 @@
+#Include 'Protheus.ch'
+#Include 'Totvs.ch'
+
+/*/{Protheus.doc} ULOJE004
+Busca em cascata e retorna um objeto normalizado.
+/*/
+User Function ULOJE004(cAuthCode,cDescPagto,cParamName)
+    Local lPix          := "PIX" $ UPPER(cDescPagto)
+    Local aAPIs         := {}
+    Local nX            := 0
+    Local cToken        := AllTrim(SuperGetMv("HV_APIVWTK",,"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhcGlnaW5zZW5nIiwiZXhwIjoxNzg3NDQ4MDY3fQ.GJqcIJBkMIfp_q_KRzgGuAHWWo93j3FWo3TObKqlAwA"))
+    Local oJsonRaw      := Nil
+    Local oDataNormal   := Nil
+    Default cParamName  := ""
+
+    aAPIs      := { ;
+        {"/v2/pedidos",             Iif(!Empty(cParamName),cParamName,"numero_pedido"),                        "PEDIDOS"}, ;
+        {"/v2/vendas/rede",         Iif(!Empty(cParamName),cParamName,"authorization_code"),                   "REDE"}, ;
+        {"/v2/vendas/mooz",         Iif(!Empty(cParamName),cParamName,Iif(lPix,"authorization_code","nsu")),   "MOOZ"}, ;
+        {"/v2/vendas/mulvipay",     Iif(!Empty(cParamName),cParamName,"cd_autorizacao"),                       "MULVIPAY"}, ;
+        {"/v2/vendas/omni",         Iif(!Empty(cParamName),cParamName,"order_id"),                             "OMNI"}, ;
+        {"/v2/vendas/pagarme",      Iif(!Empty(cParamName),cParamName,"gateway_id"),                           "PAGARME"} ;
+    }
+
+    For nX := 1 To Len(aAPIs)
+        oJsonRaw := ConsultaSetor(aAPIs[nX][1], aAPIs[nX][2], cAuthCode, cToken)
+
+        If oJsonRaw != Nil .And. oJsonRaw:HasProperty("items") .And. Len(oJsonRaw["items"]) > 0
+            // Encontrou! Agora normalizamos o primeiro item da lista
+            oDataNormal := NormalizarData(oJsonRaw["items"], aAPIs[nX][3],lPix)
+            Exit 
+        EndIf
+    Next nX
+
+Return oDataNormal
+
+/*/{Protheus.doc} NormalizarData
+Traduz os diferentes formatos de API para um objeto unico
+/*/
+Static Function NormalizarData(aItem, cOrigem, lPix)
+    Local oRet   := JsonObject():New()
+    Local nX     := 0
+    Local oItem  // Vari�vel para facilitar a leitura do item atual
+    Default lPix := .F.
+
+    // 1. Inicializa a chave "financeiro" como um array Vazio
+    oRet["financeiro"] := {} 
+
+    For nX := 1 To Len(aItem)
+        // 2. Cria um novo objeto JSON para esta posi��o do array
+        oItem := JsonObject():New()
+        
+        // Inicializa propriedades padr�o no objeto tempor�rio
+        oItem["descricao_pagamento"] := ""
+        oItem["valor_total"]         := 0
+        oItem["valor_parcela"]       := 0
+        oItem["valor_desconto"]      := 0
+        oItem["percentual_desconto"] := 0
+        oItem["vencimento"]          := ctod("")
+        oItem["origem_api"]          := cOrigem
+
+        Do Case
+            Case cOrigem == "PEDIDOS"
+                oItem["descricao_pagamento"] := "PIX_COBRANCA"//aItem[nX]["PaymentType"]
+                oItem["valor_total"]         := aItem[nX]["ValorTotal"]
+                oItem["valor_parcela"]       := aItem[nX]["ValorLiquido"]
+                oItem["valor_desconto"]      := aItem[nX]["TaxaAdm"]
+                
+                If aItem[nX]["ValorTotal"] > 0
+                    oItem["percentual_desconto"] := ROUND((aItem[nX]["TaxaAdm"] / aItem[nX]["ValorTotal"]) * 100, 2)
+                EndIf
+                
+                oItem["vencimento"]          := CTOD(aItem[nX]["Data_Vencimento"])
+
+            Case cOrigem == "REDE"
+                // Implementar l�gica REDE
+
+            Case cOrigem == "OMNI"
+                oItem["descricao_pagamento"] := "PIX NO PDV"
+                oItem["valor_total"]         := aItem[nX]["amount"]
+                oItem["valor_parcela"]       := aItem[nX]["grossAmount_parcela"]
+                oItem["valor_desconto"]      := aItem[nX]["grossAmount_parcela"] - aItem[nX]["paidAmount_parcela"]
+                oItem["percentual_desconto"] := Iif(oItem["valor_desconto"] > 0,ROUND((oItem["valor_desconto"] * 100)/aItem[nX]["grossAmount_parcela"],2),0)
+                oItem["vencimento"]          := STOD(StrTran(SubStr(aItem[nX]["previsionPaymentDate"],1,10),"-",""))
+                
+            Case cOrigem == "PAGARME"
+                // Implementar l�gica PAGARME
+            Case cOrigem == "MOOZ"
+                oItem["descricao_pagamento"] := aItem[nX]["captura"] + " - " + UPPER(aItem[nX]["bandeira"])
+                oItem["valor_total"]         := Iif(lPix,aItem[nX]["valor_bruto"],aItem[nX]["valor_bruto_parcela"])
+                oItem["valor_parcela"]       := Iif(lPix, aItem[nX]["valor_liquido"],aItem[nX]["valor_liquido_parcela"])
+                oItem["valor_desconto"]      := oItem["valor_total"]-oItem["valor_parcela"]//Iif(lPix, aItem[nX]["valor_mdr"])
+                oItem["percentual_desconto"] := ROUND((oItem["valor_desconto"] / oItem["valor_total"]) * 100, 2)
+                If lPix
+                    oItem["vencimento"]      := STOD(StrTran(SubStr(aItem[nX]["data_venda"],1,10),"-",""))+1
+                Else
+                    oItem["vencimento"]      := STOD(StrTran(SubStr(aItem[nX]["data_prevista_parcela"],1,10),"-",""))
+                EndIf                
+        EndCase
+
+        // 3. Adiciona o objeto preenchido ao array "financeiro"
+        aAdd(oRet["financeiro"], oItem)
+    Next nX
+Return oRet
+
+Static Function ConsultaSetor(cPath, cParamName, cValue, cToken)
+    Local oRest     := FWRest():New("https://api.grupoginseng.com.br")
+    Local cQuery    := "?" + cParamName + "=" + cValue
+    Local aHeaders  := {}
+    Local oRetJson  := JsonObject():New()
+    Local cResponse := ""
+
+    AAdd(aHeaders, 'Authorization: Bearer ' + cToken)
+    AAdd(aHeaders, 'Accept: application/json')
+
+    oRest:SetPath(cPath + cQuery)
+    oRest:SetTimeOut(60)
+
+    If oRest:Get(aHeaders)
+        cResponse := oRest:GetResult()
+        oRetJson:FromJson(cResponse)
+    Else
+        oRetJson := Nil
+    EndIf
+
+Return oRetJson

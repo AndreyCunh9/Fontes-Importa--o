@@ -1,0 +1,758 @@
+#Include 'Protheus.ch'
+#Include 'RestFul.CH'
+#Include 'Totvs.ch'
+
+/*/{Protheus.doc} ULOJE001
+Fun��o principal para consulta de Notas Fiscais (55) e NFC-e (65).
+/*/
+User Function ULOJE001(dDataProc)
+    Local oRest         := Nil
+    Local cUrlBase      := "https://api.grupoboticario.com.br"
+    Local cResNfe       := "/global/v1/franchising/gb-stores-data/fiscal/invoices"
+    Local cResNfce      := "/global/v1/franchising/gb-stores-data/sale/receipts"
+    Local cQuery        := ""
+    Local aHeaders      := {}
+    Local cResponse     := ""
+    Local oJson         := JsonObject():New()
+    Local cErro         := ""
+    Local cToken        := U_GETTOKENBOT()
+    Local nDiasAnt      := SuperGetMv("HV_DIASANT",,1) // Par�metro para definir quantos dias atr�s a consulta deve considerar, default 1 dia
+    Local cDataOntem    := SubStr(DtoS(Date()-nDiasAnt),1,4) + "-" + SubStr(DtoS(Date()-nDiasAnt),5,2) + "-" + SubStr(DtoS(Date()-nDiasAnt),7,2)
+    Local dZKDData      := Date()-nDiasAnt
+    Local aItems        := {}
+    Local nI            := 0
+    Local nTimeOut      := 120
+
+    Private cCnpjSX5 := ""
+    Private cDataPasta  := StrTran(cDataOntem, "-", "")
+
+    Default dDataProc := CTOD("")
+
+    DbSelectArea("ZKD")
+    ZKD->(DbSetOrder(1))//ZKD_FILDES+ZKD_ID
+
+    If !Empty(dDataProc)
+        cDataOntem  := SubStr(DtoS(dDataProc),1,4) + "-" + SubStr(DtoS(dDataProc),5,2) + "-" + SubStr(DtoS(dDataProc),7,2)
+        cDataPasta  := StrTran(cDataOntem, "-", "")
+        dZKDData    := dDataProc
+        // return
+    EndIf
+
+    // Valida��o inicial do Token
+    If Empty(cToken)
+        ConOut("[ULOJE001] Falha critica: Token nao obtido.")
+        Return
+    EndIf
+
+    // Instancia a classe REST
+    oRest := FWRest():New(cUrlBase)
+    oRest:SetTimeOut(nTimeOut)
+    //-------------------------------------------------------------------
+    // 1. CONSULTA NF-e (Modelo 55) - Baseado no print de Invoices
+    //-------------------------------------------------------------------
+    ConOut("[ULOJE001] Iniciando consulta NF-e (55)...")
+    
+    cQuery := "?invoice.updatedAt=" + cDataOntem
+    cQuery += "&start=0"
+    // cQuery += "&situation=EFETIVADA"
+    // cQuery += "&classification=VENDA"
+    cQuery += "&invoice.fiscalOperationId=2"
+
+    oRest:SetPath(cResNfe + cQuery)
+
+    aHeaders := {}
+    AAdd(aHeaders, 'Authorization: Bearer ' + cToken)
+    AAdd(aHeaders, 'Accept: application/json')
+
+    If oRest:Get(aHeaders)
+        cResponse := oRest:GetResult()
+        cErro := oJson:FromJson(cResponse)
+        
+        If Empty(cErro)
+            aItems := oJson['items'] // ou o nome da tag que cont�m a lista
+    
+            For nI := 1 To Len(aItems)
+                GravaZKD(aItems[nI],"NFE",dZKDData)
+            Next nI
+            ConOut("[ULOJE001] NFC-e processadas com sucesso.")
+        Else
+            ConOut("[ULOJE001] Erro JSON NFC-e: " + cErro)
+        EndIf
+    Else
+        ConOut("[ULOJE001] Erro na NF-e: " + oRest:GetLastError())
+    EndIf
+
+    //-------------------------------------------------------------------
+    // 2. CONSULTA NFC-e (Modelo 65) - Baseado no print de Receipts
+    //-------------------------------------------------------------------
+    ConOut("[ULOJE001] Iniciando consulta NFC-e (65)...")
+    
+    // Reinicia query e limpa objeto JSON para novo processamento
+    cQuery := ""
+    oJson  := JsonObject():New()
+
+    // Par�metros espec�ficos do endpoint de NFC-e
+    // cQuery := "?fromDateToNow=" + cDataOntem + "%2000:01:00" 
+    cQuery := "?receipt.saleDate=" + cDataOntem 
+    cQuery += "&receipt.InvoiceXMLStatus=AUTORIZADA"
+
+    oRest:SetPath(cResNfce + cQuery)
+
+    // Reaproveita os mesmos headers (Bearer Token)
+    If oRest:Get(aHeaders)
+        cResponse := oRest:GetResult()
+        cErro := oJson:FromJson(cResponse)
+        
+        If Empty(cErro)
+            aItems := oJson['items'] // ou o nome da tag que cont�m a lista
+    
+            For nI := 1 To Len(aItems)
+                GravaZKD(aItems[nI],"NFCE",dZKDData)
+            Next nI
+            ConOut("[ULOJE001] NFC-e processadas com sucesso.")
+        Else
+            ConOut("[ULOJE001] Erro JSON NFC-e: " + cErro)
+        EndIf
+    Else
+        ConOut("[ULOJE001] Erro na NFC-e: " + oRest:GetLastError())
+    EndIf
+
+Return
+
+/*/{Protheus.doc} GETTOKENBOT
+Obt�m o token JWT via POST (x-www-form-urlencoded)
+/*/
+User Function GETTOKENBOT()
+    Local cUrl          := "https://api.grupoboticario.com.br/global/v2/jwt-token/token?grant_type=client_credentials"
+    Local cResponse     := "" 
+    Local cHeaderRet    := "" 
+    Local nTimeOut      := 120
+    Local aHeadOut      := {}
+    Local cBody         := ""
+    Local oJson         := JsonObject():New()
+    Local cToken        := ""
+    
+    // Header obrigat�rio para o tipo de autentica��o do Botic�rio
+    AAdd(aHeadOut, 'Content-Type: application/x-www-form-urlencoded')
+    
+    // Montagem do corpo com Client ID e Secret
+    cBody := "client_id=" + SuperGetMv("HV_CLIIDBT",,"88ymKwAUNfu06sD85i0RiokCxWGSkFBkx9ytgI5y1ZKxX3OQ") 
+    cBody += "&client_secret=" + SuperGetMv("HV_CLISTBT",,"YDFz43qAzL6ApNIKVCxu3dAmS9GWOqJbcc2aPnFDkmEaBXexSpsHGfcItg56i2dE")
+
+    cResponse := HttpPost(cUrl, "", cBody, nTimeOut, aHeadOut, @cHeaderRet)
+
+    If !Empty(cResponse)
+        oJson:FromJson(cResponse)
+        If oJson:HasProperty("access_token")
+            cToken := oJson["access_token"]
+            ConOut("[GETTOKENBOT] Token obtido com sucesso.")
+        EndIf
+    Else
+        ConOut("[GETTOKENBOT] Erro no POST: n�o foi poss�vel obter resposta do servidor.")
+    EndIf
+
+Return cToken
+
+Static Function GravaZKD(oItem,cTipo,dZKDData)
+    Local oModel    := FWLoadModel("ULOJA001") // Carrega o modelo definido no seu fonte
+    Local nOp       := 3 // Opera��o de Inclus�o (MODEL_OPERATION_INSERT)
+    Local lRet      := .F.
+    Local aErro     := {}
+    Local cFilDestino := filDestino(oItem['storeId'])
+    Local lKey      := Iif(cTipo == "NFE",oItem:HasProperty("key"),oItem:HasProperty("eletronicKey"))
+    Local cKey      := Iif(lKey,Iif(cTipo == "NFE",oItem['key'],oItem['eletronicKey']),"")
+    Local cXML      := Iif(lKey,retXml(cKey,lKey),"")
+    Local cView     := retView(oItem,cKey,cXML)
+    Local cCgc      := retCgc(cXML,cKey)
+    Local cStXml    := ""
+    Local cCanal    := ""
+    Local cFPag     := ""
+    Local nP        := 0
+
+    If cTipo == "NFCE"
+        cStXml := Iif(oItem:HasProperty("invoiceXMLStatus"),  oItem['invoiceXMLStatus'],  "")
+        cCanal := Iif(oItem:HasProperty("channelDescription"),oItem['channelDescription'],"")
+
+        // paymentMethodDescription fica dentro do array "payments"; pega a primeira ocorrencia
+        If oItem:HasProperty("payments")
+            For nP := 1 To Len(oItem['payments'])
+                If oItem['payments'][nP]:HasProperty("paymentMethodDescription")
+                    cFPag := oItem['payments'][nP]['paymentMethodDescription']
+                    Exit
+                EndIf
+            Next nP
+        EndIf
+    Else // NFE - payload de invoices nao tem invoiceXMLStatus/channelDescription/payments
+        cStXml := Iif(oItem:HasProperty("situation"),        oItem['situation'],        "")
+        cCanal := Iif(oItem:HasProperty("importType"),       oItem['importType'],       "")
+        cFPag  := Iif(oItem:HasProperty("paymentCondition"), oItem['paymentCondition'], "")
+    EndIf
+
+    If lKey .and. !Empty(cFilDestino) .and. !Empty(cKey) /*TESTE*/ //.and. cKey == "29260114378160001740650270000018831000018846"
+ 
+        If ZKD->(DbSeek(cFilDestino + cKey))
+            nOp := 4 // Se achou, muda para Altera��o (MODEL_OPERATION_UPDATE)
+            ConOut("[ULOJE001] Registro encontrado. Alterando: " + cKey)
+        Else
+            nOp := 3 // Se n�o achou, mant�m Inclus�o
+            ConOut("[ULOJE001] Registro n�o encontrado. Incluindo: " + cKey)
+        EndIf
+
+        // Ativa o modelo em modo de inclus�o
+        oModel:SetOperation(nOp)
+        oModel:Activate()
+        
+        If nOp == 3
+            oModel:SetValue('ZKDMASTER', 'ZKD_ID',          cKey)  
+            oModel:SetValue('ZKDMASTER', 'ZKD_DATA',        dZKDData) // Data de ontem, mesma data da consulta na API
+            oModel:SetValue('ZKDMASTER', 'ZKD_TIPO',        cTipo)
+            oModel:SetValue('ZKDMASTER', 'ZKD_HIST',        "--------"+DTOC(Date())+" "+SubStr(Time(),1,8)+"--------"+Chr(13) + Chr(10)+"Registro importado com sucesso.")
+            oModel:SetValue('ZKDMASTER', 'ZKD_STATUS',      "R") 
+        Else
+            oModel:SetValue('ZKDMASTER', 'ZKD_HIST',        AllTrim(oModel:GetValue('ZKDMASTER', 'ZKD_HIST')) + CRLF +"--------"+DTOC(Date())+" "+SubStr(Time(),1,8)+"--------"+Chr(13) + Chr(10)+"Registro alterado com sucesso.")
+        EndIf
+        oModel:SetValue('ZKDMASTER', 'ZKD_JSON',        oItem:toJson())
+        oModel:SetValue('ZKDMASTER', 'ZKD_XML',         cXML)
+        oModel:SetValue('ZKDMASTER', 'ZKD_VIEW',        cView)
+        oModel:SetValue('ZKDMASTER', 'ZKD_CGC',         cCgc)
+        oModel:SetValue('ZKDMASTER', 'ZKD_FILDES',      cFilDestino)
+        oModel:SetValue('ZKDMASTER', 'ZKD_STXML',       cStXml)
+        oModel:SetValue('ZKDMASTER', 'ZKD_CANAL',       cCanal)
+        oModel:SetValue('ZKDMASTER', 'ZKD_FPAG',        cFPag)
+
+        // Valida e grava os dados
+        If oModel:VldData()
+            If oModel:CommitData()
+                ConOut("[ULOJE001] Registro gravado com sucesso: " + cKey)
+                lRet := .T.
+            Else
+                aErro := oModel:GetErrorMessage()
+                ConOut("[ULOJE001] Erro no Commit: " + aErro[4]) // Descri��o do erro
+            EndIf
+        Else
+            aErro := oModel:GetErrorMessage()
+            ConOut("[ULOJE001] Erro na Validacao: " + aErro[4])
+        EndIf
+    Else
+        ConOut("[ULOJE001] Erro: Propriedade 'key' nao encontrada no item JSON.")
+    EndIf
+
+    // Encerra o modelo para liberar mem�ria
+    oModel:DeActivate()
+    
+Return lRet
+
+/*/{Protheus.doc} filDestino
+Dado o storeId da API, localiza a filial correspondente para gravar o registro na tabela ZKD com a filial correta.
+/*/
+Static Function filDestino(nStoreId)
+    Local cStoreId := Padr(AllTrim(Str(nStoreId)), Len(SX5->X5_CHAVE))
+    Local cFilRet  := ""
+    Local nPos     := 0
+    Local aEmpresas := {}
+
+    // 1. Busca o CNPJ na tabela SX5 (Sub-tabela ZX)
+    DbSelectArea("SX5")
+    SX5->(DbSetOrder(1)) // X5_FILIAL + X5_TABELA + X5_CHAVE
+
+    If SX5->(DbSeek(xFilial("SX5") + "ZX" + cStoreId))
+        // Pega o CNPJ que gravamos na descri��o (removendo espa�os)
+        cCnpjSX5 := AllTrim(SX5->X5_DESCRI)
+    EndIf
+
+    // 2. Localiza no Array da FwLoadSM0
+    If !Empty(cCnpjSX5)
+        aEmpresas := FwLoadSM0() // Carrega a tabela de empresas em mem�ria
+
+        // Faz o aScan procurando o CNPJ na posi��o 18 de cada linha
+        nPos := aScan(aEmpresas, {|x| AllTrim(x[18]) == cCnpjSX5})
+
+        If nPos > 0
+            // Se encontrou (nPos > 0), extra�mos o c�digo da filial na posi��o 4
+            cFilRet := AllTrim(aEmpresas[nPos][3])+AllTrim(aEmpresas[nPos][4])+AllTrim(aEmpresas[nPos][5])
+        EndIf
+    EndIf
+
+    // Retorna o c�digo da filial encontrado ou "" se n�o houver correspond�ncia
+Return cFilRet
+
+/*/{Protheus.doc} retXml
+Localiza o arquivo XML, carrega em objeto e retorna o conte�do como string.
+/*/
+Static Function retXml(cKey,lKey)
+    Local cDirBase   := "\fiscal_xmls\" + cDataPasta + "\docs-fiscais\"
+    Local aDirID     := Directory(cDirBase + "*.*", "D")
+    Local cID        := ""
+    Local nI         := 0
+    Local nS         := 0
+    Local cPathFinal := ""
+    Local aFiles     := {}
+    Local cArquivo   := ""
+    Local cXmlStr    := "" // String que ser� retornada
+    Local oXml       := Nil
+    Local cError     := ""
+    Local cWarning   := ""
+    Local aSubPastas := {"saida", "importacao"}
+
+    If lKey
+        cKey := Lower(cKey)
+        // 1. Localiza a pasta do ID din�mico
+        For nI := 1 To Len(aDirID)
+            If "D" $ aDirID[nI][5] .And. !(aDirID[nI][1] == "." .Or. aDirID[nI][1] == "..")
+                cID := Lower(aDirID[nI][1])
+                Exit
+            EndIf
+        Next nI
+
+        If !Empty(cID)
+            // 2. Procura em "saida" e "importacao", independente do tipo do documento (NFE/NFCE)
+            For nS := 1 To Len(aSubPastas)
+                // Monta o caminho usando as vari�veis privadas cCnpjSX5 e cDataPasta
+                cPathFinal := cDirBase + cID + "\" + cCnpjSX5 + "\" + aSubPastas[nS] + "\"
+
+                If !ExistDir(cPathFinal) .And. ExistDir(cDirBase + cCnpjSX5 + "\" + aSubPastas[nS] + "\")
+                    // Estrutura sem pasta de ID (cargas antigas, sem a camada de ID dinamico)
+                    cPathFinal := cDirBase + cCnpjSX5 + "\" + aSubPastas[nS] + "\"
+                EndIf
+
+                If ExistDir(cPathFinal)
+                    aFiles := Directory(cPathFinal + "*.xml")
+
+                    For nI := 1 To Len(aFiles)
+                        // Procura o arquivo que cont�m a chave solicitada
+                        If cKey $ Lower(aFiles[nI][1])
+                            cArquivo := cPathFinal + aFiles[nI][1]
+
+                            // A. L� o arquivo f�sico e joga para uma string
+                            cXmlStr := MemoRead(cArquivo)
+
+                            If !Empty(cXmlStr)
+                                // B. "Joga" a string para um objeto XML (Parser)
+                                // O "_" define o separador de tags
+                                oXml := XmlParser(cXmlStr, "_", @cError, @cWarning)
+
+                                If oXml == Nil
+                                    ConOut("[ULOJE003] Erro no Parse do XML: " + cError)
+                                Else
+                                    ConOut("[ULOJE003] XML carregado em objeto com sucesso.")
+                                    // Aqui o objeto oXml est� pronto para uso, ex: oXml:_NfeProc:_Nfe...
+                                EndIf
+                            EndIf
+
+                            Exit // Arquivo encontrado, encerra o loop de arquivos desta subpasta
+                        EndIf
+                    Next nI
+                EndIf
+
+                If !Empty(cXmlStr)
+                    Exit // Ja encontrou o XML, nao precisa testar a outra subpasta
+                EndIf
+            Next nS
+        EndIf
+    Else
+        ConOut("[ULOJE003] Erro: Propriedade 'key' nao encontrada no item JSON.")
+    EndIf
+
+    // Retorna o conte�do lido (string) para quem chamou a fun��o
+Return cXmlStr
+
+/*/{Protheus.doc} retView
+Localiza a view financeira, carrega em objeto e retorna o conte�do como string.
+/*/
+Static Function retView(oJson,cNumDoc,cXML)
+    Local cItem     := ""
+    Local cView     := ""
+    Local cError    := ""
+    Local cWarning  := ""
+    Local aItens    := {}
+    Local nX        := 0
+    Local nY        := 0
+    Local oFinanceiro := Nil
+    Local oXml      := Nil
+    Local cIdSite   := ""
+    Default cXML    := ""
+    // Busca itens do JSON
+    If oJson:Hasproperty("items")
+        aItens := oJson['items']
+    Else
+        conout( "[ULOJE001]: Itens n�o encontrados no JSON do documento [" + cNumDoc + "].")
+    EndIf
+    // Pedido Site: o ID do OMNI vem embutido em "observation" (payload de NF-e nao tem externalId)
+    If oJson:Hasproperty("observation") .And. ValType(oJson["observation"]) == "C"
+        cIdSite := ExtraiIdSite(oJson["observation"])
+        If !Empty(cIdSite)
+            oFinanceiro := U_ULOJE004(cIdSite,'')
+        EndIf
+    EndIf
+    // Consulta por orderNumber
+    If oFinanceiro == Nil
+        For nX := 1 To Len(aItens)
+            cItem := StrZero(nX, TamSX3("L2_ITEM")[1])
+            If aItens[nX]:Hasproperty("orderNumber")
+                If !Empty(aItens[nX]["orderNumber"])
+                    oFinanceiro := U_ULOJE004(aItens[nX]["orderNumber"],'')
+                    If oFinanceiro != Nil
+                        exit
+                    Else
+                        conout("[ULOJE001]: A view financeira n�o foi encontrada para o item [" + cItem + "] do documento [" + cNumDoc + "].")
+                    EndIf
+                Else
+                    conout("[ULOJE001]: N�mero do pedido vazio para o item [" + cItem + "] do documento [" + cNumDoc + "]. Ignorando consulta � API.")
+                EndIf
+            Else
+                conout("[ULOJE001]: N�mero do pedido n�o encontrado para o item [" + cItem + "] do documento [" + cNumDoc + "]. Ignorando consulta � API.")
+            EndIf
+        Next
+    EndIf
+    // Consulta por authorizationNsu
+    If oFinanceiro == Nil
+        If oJson:Hasproperty("payments")
+            For nX := 1 to Len(oJson["payments"])
+                If oJson["payments"][nX]:Hasproperty("authorizationNsu")		
+                    If !Empty(oJson["payments"][nX]["authorizationNsu"]) /*TESTE*/ //.and. oJson["id"] == "002469-027-1768014000000-23702"
+                        oFinanceiro := U_ULOJE004(oJson["payments"][nX]["authorizationNsu"],oJson["payments"][nX]["paymentMethodDescription"])
+                        If oFinanceiro != Nil
+                            exit
+                        Else
+                            oFinanceiro := U_ULOJE004(oJson["payments"][nX]["cardAuthorization"],oJson["payments"][nX]["paymentMethodDescription"],"authorization_code")
+                            If oFinanceiro != Nil
+                                exit
+                            Else
+                                conout("[ULOJE001]: A view financeira n�o foi encontrada para o item [" + cItem + "] do documento [" + cNumDoc + "].")
+                            EndIf
+                        EndIf
+                    EndIf
+                EndIf
+            Next
+        EndIf
+    EndIf
+    // Busca por external_id para OMNI
+    If oFinanceiro == Nil
+        If oJson:Hasproperty("externalId") .and. oJson:Hasproperty("payments")
+            For nX := 1 to Len(oJson["payments"])
+                If oJson["payments"][nX]:Hasproperty("paymentMethodDescription")
+                    If !Empty(oJson["externalId"]) .and. !Empty(oJson["payments"][nX]["paymentMethodDescription"])
+                        oFinanceiro := U_ULOJE004(StrTran(oJson["externalId"],"-F1",""),oJson["payments"][nX]["paymentMethodDescription"])
+                        If oFinanceiro != Nil
+                            exit
+                        Else
+                            conout("[ULOJE001]: A view financeira n�o foi encontrada para o item [" + cItem + "] do documento [" + cNumDoc + "].")
+                        EndIf
+                    EndIf
+                EndIf
+            Next
+        EndIf
+    EndIf
+    // Consulta por authorization_code
+    If oFinanceiro == Nil
+        If oJson:Hasproperty("payments")
+            For nX := 1 to Len(oJson["payments"])
+                If oJson["payments"][nX]:Hasproperty("paymentMethodDescription")		
+                    If !Empty(oJson["payments"][nX]["paymentMethodDescription"])	
+                        If 	AllTrim(oJson["payments"][nX]["paymentMethodDescription"]) == "PIX NO PDV"		
+                            If !Empty(cXML)
+                                oXml := XmlParser(cXML, "_", @cError, @cWarning)
+                                If oXml <> Nil
+                                    If AttIsMemberOf(oXml, "_NFEPROC")
+                                        If AttIsMemberOf(oXml:_NFEPROC, "_NFE")
+                                            If AttIsMemberOf(oXml:_NFEPROC:_NFE, "_INFNFE")
+                                                If AttIsMemberOf(oXml:_NFEPROC:_NFE:_INFNFE, "_INFADIC")
+                                                    If AttIsMemberOf(oXml:_NFEPROC:_NFE:_INFNFE:_INFADIC, "_OBSCONT")
+                                                        If Len(oXml:_NFEPROC:_NFE:_INFNFE:_INFADIC:_OBSCONT) > 0
+                                                            For nY := 1 to Len(oXml:_NFEPROC:_NFE:_INFNFE:_INFADIC:_OBSCONT)
+                                                                If oXml:_NFEPROC:_NFE:_INFNFE:_INFADIC:_OBSCONT[nY]:_XCAMPO:TEXT == "idPix"
+                                                                    oFinanceiro := U_ULOJE004(oXml:_NFEPROC:_NFE:_INFNFE:_INFADIC:_OBSCONT[nY]:_XTEXTO:TEXT,oJson["payments"][nX]["paymentMethodDescription"])
+                                                                    If oFinanceiro != Nil
+                                                                        exit
+                                                                    Else
+                                                                        conout("[ULOJE001]: A view financeira n�o foi encontrada para o item [" + cItem + "] do documento [" + cNumDoc + "].")
+                                                                    EndIf
+                                                                EndIf
+                                                            Next
+                                                        EndIf
+                                                    EndIf
+                                                EndIf
+                                            EndIf
+                                        EndIf
+                                    EndIf
+                                EndIf
+                            EndIf
+                        EndIf
+                    EndIf
+                EndIf
+            Next
+        EndIf
+    EndIf
+    // Se a view financeira foi encontrada, converte para JSON e retorna, sen�o retorna string vazia
+    If oFinanceiro <> Nil
+        cView := oFinanceiro:toJson()
+    EndIf
+Return cView
+
+/*/{Protheus.doc} ExtraiIdSite
+Extrai o identificador do pedido site a partir do texto de observacao da nota
+fiscal, no formato "...Pedido Site <ID>...". Retorna "" se nao encontrar.
+/*/
+Static Function ExtraiIdSite(cObservacao)
+    Local cMarcador := "PEDIDO SITE"
+    Local cObsUpper := Upper(cObservacao)
+    Local nPos      := At(cMarcador, cObsUpper)
+    Local cResto    := ""
+    Local cId       := ""
+    Local nC        := 0
+    Local cChar     := ""
+
+    If nPos > 0
+        cResto := AllTrim(SubStr(cObservacao, nPos + Len(cMarcador)))
+
+        For nC := 1 To Len(cResto)
+            cChar := Upper(SubStr(cResto, nC, 1))
+            If (cChar >= "0" .And. cChar <= "9") .Or. (cChar >= "A" .And. cChar <= "Z")
+                cId += cChar
+            Else
+                Exit
+            EndIf
+        Next nC
+    EndIf
+Return cId
+
+/*/{Protheus.doc} retCgc
+Localiza o CPF/CNPJ do cliente no XML, carrega em objeto e retorna o conte�do como string.
+/*/
+Static Function retCgc(cXml,cNumDoc)
+    Local cCliPad 		:= "999999"//PadR(SuperGetMV("MV_CLIPAD")) // Cliente padrao
+	Local cLojPad 		:= "01"//PadR(SuperGetMV("MV_LOJAPAD") , TamSx3("A1_LOJA")[1]) // loja padrao
+    Local cCGC          := ""
+    Local lCliente 		:= .F.
+    Local cError        := ""
+    Local cWarning      := ""
+    Local oInfNfe := Nil
+    Local oRaizNFe := Nil
+    Local oDest
+    Local oXml := XmlParser(cXml, "_", @cError, @cWarning)
+    // Busca cliente pelo XML
+    If oXml != Nil
+        // Caminho base at� o INFNFE para reduzir a verbosidade
+        // Alguns XMLs (ex.: pasta importacao) vem sem o envelope _NFEPROC (sem protocolo de autorizacao)
+        If AttIsMemberOf(oXml, "_NFEPROC")
+            oRaizNFe := oXml:_NFEPROC
+        Else
+            oRaizNFe := oXml
+        EndIf
+
+        If AttIsMemberOf(oRaizNFe, "_NFE") .And. AttIsMemberOf(oRaizNFe:_NFE, "_INFNFE")
+            oInfNfe := oRaizNFe:_NFE:_INFNFE
+        EndIf
+    EndIf
+
+    If oInfNfe != Nil
+        oDest   := Nil
+        cCGC    := ""
+        // 1. Verifica se o n� DEST existe dentro de INFNFE
+        If AttIsMemberOf(oInfNfe, "_DEST")
+            oDest := oInfNfe:_DEST							
+            // 2. Verifica se � CPF ou CNPJ dentro de DEST
+            If AttIsMemberOf(oDest, "_CPF")
+                cCGC := oDest:_CPF:TEXT								
+            ElseIf AttIsMemberOf(oDest, "_CNPJ")
+                cCGC := oDest:_CNPJ:TEXT
+            EndIf
+            // 3. Executa a busca se encontrou o documento
+            SA1->(DbSetOrder(3))						
+            If !Empty(cCGC) .And. SA1->(DbSeek(xFilial('SA1') + cCGC))
+                lCliente := .T.
+            EndIf
+        EndIf
+    EndIf
+    // Busca cliente padr�o
+    If !lCliente
+        SA1->(DbSetOrder(1)) // A1_COD+A1_LOJA
+        If SA1->(DbSeek(xFilial('SA1')+cCliPad+cLojPad))
+            cCGC := SA1->A1_CGC
+            conout("[ULOJE001]: CPF/CNPJ do cliente n�o encontrado no XML do documento [" + cNumDoc + "]. Usando cliente padr�o.")
+            lCliente := .T.
+        Else
+            conout("[ULOJE001]: Cliente padr�o do MV_CLIPAD n�o encontrado. Verificar cadastro. Documento [" + cNumDoc + "].")
+        EndIf
+    Else
+        cCGC := ""
+    EndIf
+Return cCGC
+
+/*/{Protheus.doc} GravaSX5ZX
+Grava na tabela SX5 (Sub-tabela ZX) os c�digos de loja e CNPJ para posterior consulta e associa��o.
+/*/
+User Function GravaSX5ZX()
+    Local aDados    := {}
+    Local nI        := 0
+    Local cTabela   := "ZX"
+    Local cFilSX5   := xFilial("SX5")
+    // Local lOk       := .T.
+    Local cChave    := ""
+    Local cCnpj     := ""  
+
+    // Estrutura: { BPCS , CNPJ }
+    // --- LISTA ATIVA ---
+    AAdd(aDados, {"3546", "08489643000314"})
+    AAdd(aDados, {"4494", "08489643000152"})
+    AAdd(aDados, {"4560", "08489643000403"})
+    AAdd(aDados, {"5699", "08489643000586"})
+    AAdd(aDados, {"12522", "08489643001639"})
+    AAdd(aDados, {"12817", "08489643002015"})
+    AAdd(aDados, {"12818", "08489643003097"})
+    AAdd(aDados, {"12820", "08489643002449"})
+    AAdd(aDados, {"12823", "08489643002287"})
+    AAdd(aDados, {"12824", "08489643002104"})
+    AAdd(aDados, {"12826", "08489643002872"})
+    AAdd(aDados, {"12828", "08489643001710"})
+    AAdd(aDados, {"12829", "08489643002953"})
+    AAdd(aDados, {"12830", "08489643002520"})
+    AAdd(aDados, {"12838", "08489643001809"})
+    AAdd(aDados, {"13427", "08489643003178"})
+    AAdd(aDados, {"14617", "08489643003410"})
+    AAdd(aDados, {"14668", "08489643003682"})
+    AAdd(aDados, {"19103", "08489643002791"})
+    AAdd(aDados, {"20005", "08489643004140"})
+    AAdd(aDados, {"20006", "08489643003844"})
+    AAdd(aDados, {"20009", "08489643004069"})
+    AAdd(aDados, {"20056", "08489643004220"})
+    AAdd(aDados, {"20057", "08489643004301"})
+    AAdd(aDados, {"21495", "08489643006789"})
+    AAdd(aDados, {"20858", "08489643002368"})
+    AAdd(aDados, {"20968", "08489643005979"})
+    AAdd(aDados, {"20969", "08489643005464"})
+    AAdd(aDados, {"20970", "08489643005030"})
+    AAdd(aDados, {"20986", "08489643005545"})
+    AAdd(aDados, {"20988", "08489643005111"})
+    AAdd(aDados, {"20989", "08489643005626"})
+    AAdd(aDados, {"20991", "08489643006193"})
+    AAdd(aDados, {"20992", "08489643004573"})
+    AAdd(aDados, {"20993", "08489643004654"})
+    AAdd(aDados, {"20994", "08489643004735"})
+    AAdd(aDados, {"20441", "08489643004492"})
+    AAdd(aDados, {"20996", "08489643005707"})
+    AAdd(aDados, {"20997", "08489643005898"})
+    AAdd(aDados, {"20998", "08489643006274"})
+    AAdd(aDados, {"20999", "08489643005383"})
+    AAdd(aDados, {"21000", "08489643005200"})
+    AAdd(aDados, {"21001", "08489643004905"})
+    AAdd(aDados, {"21007", "08489643004816"})
+    AAdd(aDados, {"21068", "08489643006355"})
+    AAdd(aDados, {"20995", "08489643006002"})
+    AAdd(aDados, {"23156", "08489643007750"})
+    AAdd(aDados, {"21277", "08489643006517"})
+    AAdd(aDados, {"21375", "08489643007165"})
+    AAdd(aDados, {"21381", "08489643006940"})
+    AAdd(aDados, {"21383", "08489643007084"})
+    AAdd(aDados, {"21278", "08489643006606"})
+    AAdd(aDados, {"21624", "08489643007246"})
+    AAdd(aDados, {"21647", "08489643001981"})
+    AAdd(aDados, {"910173", "20318877000132"})
+    AAdd(aDados, {"910291", "20318877000213"})
+    AAdd(aDados, {"22448", "08489643007327"})
+    AAdd(aDados, {"22541", "08489643007599"})
+    AAdd(aDados, {"AMG", "08489643007670"}) // Ajustado chave vazia
+    AAdd(aDados, {"21356", "08489643007750"})
+    AAdd(aDados, {"21296", "08489643006436"})
+    AAdd(aDados, {"23475", "08489643007408"})
+    AAdd(aDados, {"23813", "08489643007831"})
+    AAdd(aDados, {"23665", "14378160002127"})
+    AAdd(aDados, {"23701", "14378160001821"})
+    AAdd(aDados, {"23702", "14378160001740"})
+    AAdd(aDados, {"23703", "14378160001660"})
+    AAdd(aDados, {"23704", "14378160001589"})
+    AAdd(aDados, {"23705", "14378160001317"})
+    AAdd(aDados, {"23706", "14378160001236"})
+    AAdd(aDados, {"23707", "14378160001155"})
+    AAdd(aDados, {"23708", "14378160001074"})
+    AAdd(aDados, {"23709", "14378160000930"})
+    AAdd(aDados, {"23711", "14378160000507"})
+    AAdd(aDados, {"23712", "14378160000698"})
+    AAdd(aDados, {"23713", "14378160000183"})
+
+    // --- CNPJS BAIXADOS ---
+    AAdd(aDados, {"11201", "08489643001558"})
+    AAdd(aDados, {"12833", "08489643002600"})
+    AAdd(aDados, {"910378", "20318877000302"})
+    AAdd(aDados, {"SCHUTZ", "17198886000122"})
+    AAdd(aDados, {"12821", "08489643002368"})
+    AAdd(aDados, {"19334", "26842846000162"})
+    AAdd(aDados, {"19335", "26842846000324"})
+    AAdd(aDados, {"19336", "26842846000243"})
+    AAdd(aDados, {"20008", "26842846000405"})
+    AAdd(aDados, {"20010", "26842846000596"})
+    AAdd(aDados, {"20058", "26842846001134"})
+    AAdd(aDados, {"20059", "26842846001304"})
+    AAdd(aDados, {"20060", "26842846001215"})
+    AAdd(aDados, {"20061", "26842846000758"})
+    AAdd(aDados, {"20062", "26842846000839"})
+    AAdd(aDados, {"20063", "26842846000910"})
+    AAdd(aDados, {"20064", "26842846001053"})
+    AAdd(aDados, {"20142", "26842846001487"})
+    AAdd(aDados, {"20621", "37672358000170"})
+    AAdd(aDados, {"20622", "37672358000251"})
+    AAdd(aDados, {"20623", "37672358000332"})
+    AAdd(aDados, {"20772", "37672358001061"})
+    AAdd(aDados, {"20773", "37672358001223"})
+    AAdd(aDados, {"20774", "37672358000413"})
+    AAdd(aDados, {"20775", "37672358000766"})
+    AAdd(aDados, {"20776", "37672358001142"})
+    AAdd(aDados, {"20777", "37672358000685"})
+    AAdd(aDados, {"20778", "37672358001304"})
+    AAdd(aDados, {"20779", "37672358000847"})
+    AAdd(aDados, {"20780", "37672358000502"})
+    AAdd(aDados, {"20781", "37672358000928"})
+    AAdd(aDados, {"20029", "26842846000677"})
+    AAdd(aDados, {"20364", "26842846001568"})
+    AAdd(aDados, {"20443", "26842846001720"})
+    AAdd(aDados, {"20444", "26842846001649"})
+    AAdd(aDados, {"12819", "08489643001981"})
+    AAdd(aDados, {"17842", "08489643003763"})
+    AAdd(aDados, {"20007", "08489643003925"})
+    AAdd(aDados, {"21382", "08489643006860"})
+
+    DbSelectArea("SX5")
+    SX5->(DbSetOrder(1)) // X5_FILIAL + X5_TABELA + X5_CHAVE
+
+    Begin Transaction
+        For nI := 1 To Len(aDados)
+            
+            cChave := Padr(aDados[nI][1], Len(SX5->X5_CHAVE))
+            cCnpj  := aDados[nI][2]
+
+            // Verifica se o BPCS n�o est� vazio antes de tentar gravar
+            If !Empty(aDados[nI][1])
+                If !SX5->(DbSeek(cFilSX5 + cTabela + cChave))
+                    RecLock("SX5", .T.)
+                    SX5->X5_FILIAL := cFilSX5
+                    SX5->X5_TABELA := cTabela
+                    SX5->X5_CHAVE  := cChave
+                Else
+                    RecLock("SX5", .F.)
+                EndIf
+
+                SX5->X5_DESCRI := cCnpj
+                SX5->(MsUnlock())
+            EndIf
+        Next nI
+    End Transaction
+
+    MsgInfo("Carga da tabela ZX finalizada com sucesso!", "Aviso")
+
+Return
+
+/*/{Protheus.doc} JLOJE001
+Job para preparar o ambiente, configurar o RPC e chamar a fun��o principal de consulta e grava��o dos documentos fiscais.
+/*/
+User Function JLOJE001()
+    Local dDataProc := SToD("20260101") 
+
+    ConOut("[JLOJE001] Prerando ambiente.")
+    RpcSetEnv("01","010101")
+    ConOut("[JLOJE001] Ambiente configurado "+cFilAnt+".")
+    
+    While dDataProc <> Date()
+        U_ULOJE001(dDataProc)
+        dDataProc += 1
+    EndDO
+Return
