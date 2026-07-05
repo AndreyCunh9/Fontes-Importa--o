@@ -370,6 +370,8 @@ Static Function retView(oJson,cNumDoc,cXML)
     Local oFinanceiro := Nil
     Local oXml      := Nil
     Local cIdSite   := ""
+    Local cCaut     := ""
+    Local cMerchant := ""
     Default cXML    := ""
     // Busca itens do JSON
     If oJson:Hasproperty("items")
@@ -484,10 +486,103 @@ Static Function retView(oJson,cNumDoc,cXML)
         EndIf
     EndIf
     // Se a view financeira foi encontrada, converte para JSON e retorna, sen�o retorna string vazia
+    If oFinanceiro == Nil .And. !Empty(cXML) .And. oJson:HasProperty("storeId")
+        cCaut := RetCautXml(cXML)
+
+        If !Empty(cCaut)
+            cMerchant := PadL(AllTrim(cValToChar(oJson["storeId"])), 8, "0")
+            oFinanceiro := U_ULOJE004MZ(cCaut, cMerchant)
+
+            If oFinanceiro == Nil
+                ConOut("[ULOJE001]: Fallback Mooz nao encontrou view para merchant [" + cMerchant + "] authorization_code [" + cCaut + "] documento [" + cNumDoc + "].")
+            EndIf
+        Else
+            ConOut("[ULOJE001]: cAut nao encontrado no XML do documento [" + cNumDoc + "].")
+        EndIf
+    EndIf
+
     If oFinanceiro <> Nil
         cView := oFinanceiro:toJson()
     EndIf
 Return cView
+
+Static Function RetCautXml(cXML)
+    Local cError    := ""
+    Local cWarning  := ""
+    Local cCaut     := ""
+    Local oXml      := XmlParser(cXML, "_", @cError, @cWarning)
+    Local oRaizNFe  := Nil
+    Local oInfNfe   := Nil
+    Local oPag      := Nil
+    Local uDetPag   := Nil
+    Local nX        := 0
+
+    If oXml != Nil
+        If AttIsMemberOf(oXml, "_NFEPROC")
+            oRaizNFe := oXml:_NFEPROC
+        Else
+            oRaizNFe := oXml
+        EndIf
+
+        If AttIsMemberOf(oRaizNFe, "_NFE") .And. AttIsMemberOf(oRaizNFe:_NFE, "_INFNFE")
+            oInfNfe := oRaizNFe:_NFE:_INFNFE
+        EndIf
+
+        If oInfNfe != Nil .And. AttIsMemberOf(oInfNfe, "_PAG")
+            oPag := oInfNfe:_PAG
+
+            If AttIsMemberOf(oPag, "_DETPAG")
+                uDetPag := oPag:_DETPAG
+
+                If ValType(uDetPag) == "A"
+                    For nX := 1 To Len(uDetPag)
+                        cCaut := CautDetPag(uDetPag[nX])
+                        If !Empty(cCaut)
+                            Exit
+                        EndIf
+                    Next nX
+                Else
+                    cCaut := CautDetPag(uDetPag)
+                EndIf
+            EndIf
+        EndIf
+    EndIf
+
+    If Empty(cCaut)
+        cCaut := ExtraiTagXml(cXML, "cAut")
+    EndIf
+
+Return cCaut
+
+Static Function CautDetPag(oDetPag)
+    Local cCaut := ""
+
+    If oDetPag != Nil .And. AttIsMemberOf(oDetPag, "_CARD")
+        If AttIsMemberOf(oDetPag:_CARD, "_CAUT")
+            cCaut := AllTrim(oDetPag:_CARD:_CAUT:TEXT)
+        EndIf
+    EndIf
+
+Return cCaut
+
+Static Function ExtraiTagXml(cXML, cTag)
+    Local cXmlUpper := Upper(cXML)
+    Local cIniTag   := "<" + Upper(cTag) + ">"
+    Local cFimTag   := "</" + Upper(cTag) + ">"
+    Local nIni      := At(cIniTag, cXmlUpper)
+    Local nFim      := 0
+    Local cRet      := ""
+
+    If nIni > 0
+        nIni += Len(cIniTag)
+        nFim := At(cFimTag, SubStr(cXmlUpper, nIni))
+
+        If nFim > 0
+            cRet := AllTrim(SubStr(cXML, nIni, nFim - 1))
+        EndIf
+    EndIf
+
+Return cRet
 
 /*/{Protheus.doc} ExtraiIdSite
 Extrai o identificador do pedido site a partir do texto de observacao da nota
@@ -652,7 +747,6 @@ User Function GravaSX5ZX()
     AAdd(aDados, {"22448", "08489643007327"})
     AAdd(aDados, {"22541", "08489643007599"})
     AAdd(aDados, {"AMG", "08489643007670"}) // Ajustado chave vazia
-    AAdd(aDados, {"21356", "08489643007750"})
     AAdd(aDados, {"21296", "08489643006436"})
     AAdd(aDados, {"23475", "08489643007408"})
     AAdd(aDados, {"23813", "08489643007831"})
@@ -669,6 +763,10 @@ User Function GravaSX5ZX()
     AAdd(aDados, {"23711", "14378160000507"})
     AAdd(aDados, {"23712", "14378160000698"})
     AAdd(aDados, {"23713", "14378160000183"})
+    AAdd(aDados, {"24255", "08489643009451"})
+    AAdd(aDados, {"24257", "08489643008803"})
+    AAdd(aDados, {"24269", "08489643009613"})
+    AAdd(aDados, {"24293", "08489643009966"})
 
     // --- CNPJS BAIXADOS ---
     AAdd(aDados, {"11201", "08489643001558"})

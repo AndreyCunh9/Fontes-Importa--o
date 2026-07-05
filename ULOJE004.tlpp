@@ -34,6 +34,24 @@ User Function ULOJE004(cAuthCode,cDescPagto,cParamName)
 
 Return oDataNormal
 
+/*/{Protheus.doc} ULOJE004MZ
+Busca vendas Mooz por merchant_id + authorization_code e retorna objeto normalizado.
+/*/
+User Function ULOJE004MZ(cAuthCode,cMerchantId)
+    Local cToken        := AllTrim(SuperGetMv("HV_APIVWTK",,"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhcGlnaW5zZW5nIiwiZXhwIjoxNzg3NDQ4MDY3fQ.GJqcIJBkMIfp_q_KRzgGuAHWWo93j3FWo3TObKqlAwA"))
+    Local oJsonRaw      := Nil
+    Local oDataNormal   := Nil
+
+    If !Empty(cAuthCode) .And. !Empty(cMerchantId)
+        oJsonRaw := ConsultaMooz(cMerchantId, cAuthCode, cToken)
+
+        If oJsonRaw != Nil .And. oJsonRaw:HasProperty("items") .And. Len(oJsonRaw["items"]) > 0
+            oDataNormal := NormalizarData(oJsonRaw["items"], "MOOZ", .F.)
+        EndIf
+    EndIf
+
+Return oDataNormal
+
 /*/{Protheus.doc} NormalizarData
 Traduz os diferentes formatos de API para um objeto unico
 /*/
@@ -114,6 +132,28 @@ Static Function ConsultaSetor(cPath, cParamName, cValue, cToken)
     AAdd(aHeaders, 'Accept: application/json')
 
     oRest:SetPath(cPath + cQuery)
+    oRest:SetTimeOut(60)
+
+    If oRest:Get(aHeaders)
+        cResponse := oRest:GetResult()
+        oRetJson:FromJson(cResponse)
+    Else
+        oRetJson := Nil
+    EndIf
+
+Return oRetJson
+
+Static Function ConsultaMooz(cMerchantId, cAuthCode, cToken)
+    Local oRest     := FWRest():New("https://api.grupoginseng.com.br")
+    Local cQuery    := "?page=1&page_size=50&merchant_id=" + cMerchantId + "&authorization_code=" + cAuthCode + "&sort_by=data_venda&sort_order=desc"
+    Local aHeaders  := {}
+    Local oRetJson  := JsonObject():New()
+    Local cResponse := ""
+
+    AAdd(aHeaders, 'Authorization: Bearer ' + cToken)
+    AAdd(aHeaders, 'Accept: application/json')
+
+    oRest:SetPath("/v2/vendas/mooz" + cQuery)
     oRest:SetTimeOut(60)
 
     If oRest:Get(aHeaders)
