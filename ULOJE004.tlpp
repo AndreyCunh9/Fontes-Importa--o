@@ -5,13 +5,21 @@
 Busca em cascata e retorna um objeto normalizado.
 /*/
 User Function ULOJE004(cAuthCode,cDescPagto,cParamName)
-    Local lPix          := "PIX" $ UPPER(cDescPagto)
+    Local lPix          := .F.
     Local aAPIs         := {}
     Local nX            := 0
     Local cToken        := AllTrim(SuperGetMv("HV_APIVWTK",,"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhcGlnaW5zZW5nIiwiZXhwIjoxNzg3NDQ4MDY3fQ.GJqcIJBkMIfp_q_KRzgGuAHWWo93j3FWo3TObKqlAwA"))
     Local oJsonRaw      := Nil
     Local oDataNormal   := Nil
     Default cParamName  := ""
+    Default cDescPagto  := "" // Propriedade pode vir com valor null no JSON de origem
+
+    // Sem codigo de autorizacao valido nao ha o que consultar nas APIs
+    If ValType(cAuthCode) != "C" .Or. Empty(cAuthCode)
+        Return Nil
+    EndIf
+
+    lPix := "PIX" $ UPPER(cDescPagto)
 
     aAPIs      := { ;
         {"/v2/pedidos",             Iif(!Empty(cParamName),cParamName,"numero_pedido"),                        "PEDIDOS"}, ;

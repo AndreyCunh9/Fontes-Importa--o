@@ -12,15 +12,10 @@ User Function ULOJE001(dDataProc)
     Local cResNfce      := "/global/v1/franchising/gb-stores-data/sale/receipts"
     Local cQuery        := ""
     Local aHeaders      := {}
-    Local cResponse     := ""
-    Local oJson         := JsonObject():New()
-    Local cErro         := ""
     Local cToken        := U_GETTOKENBOT()
     Local nDiasAnt      := SuperGetMv("HV_DIASANT",,1) // Par�metro para definir quantos dias atr�s a consulta deve considerar, default 1 dia
     Local cDataOntem    := SubStr(DtoS(Date()-nDiasAnt),1,4) + "-" + SubStr(DtoS(Date()-nDiasAnt),5,2) + "-" + SubStr(DtoS(Date()-nDiasAnt),7,2)
     Local dZKDData      := Date()-nDiasAnt
-    Local aItems        := {}
-    Local nI            := 0
     Local nTimeOut      := 120
 
     Private cCnpjSX5 := ""
@@ -48,73 +43,33 @@ User Function ULOJE001(dDataProc)
     oRest := FWRest():New(cUrlBase)
     oRest:SetTimeOut(nTimeOut)
     //-------------------------------------------------------------------
-    // 1. CONSULTA NF-e (Modelo 55) - Baseado no print de Invoices
+    // 1. CONSULTA NF-e (Modelo 55) - Endpoint de Invoices (paginado)
     //-------------------------------------------------------------------
     ConOut("[ULOJE001] Iniciando consulta NF-e (55)...")
-    
+
     cQuery := "?invoice.updatedAt=" + cDataOntem
-    cQuery += "&start=0"
     // cQuery += "&situation=EFETIVADA"
     // cQuery += "&classification=VENDA"
     cQuery += "&invoice.fiscalOperationId=2"
-
-    oRest:SetPath(cResNfe + cQuery)
 
     aHeaders := {}
     AAdd(aHeaders, 'Authorization: Bearer ' + cToken)
     AAdd(aHeaders, 'Accept: application/json')
 
-    If oRest:Get(aHeaders)
-        cResponse := oRest:GetResult()
-        cErro := oJson:FromJson(cResponse)
-        
-        If Empty(cErro)
-            aItems := oJson['items'] // ou o nome da tag que cont�m a lista
-    
-            For nI := 1 To Len(aItems)
-                GravaZKD(aItems[nI],"NFE",dZKDData)
-            Next nI
-            ConOut("[ULOJE001] NFC-e processadas com sucesso.")
-        Else
-            ConOut("[ULOJE001] Erro JSON NFC-e: " + cErro)
-        EndIf
-    Else
-        ConOut("[ULOJE001] Erro na NF-e: " + oRest:GetLastError())
+    If ConsultaPag(oRest, cResNfe, cQuery, aHeaders, "NFE", dZKDData)
+        ConOut("[ULOJE001] NF-e processadas com sucesso.")
     EndIf
 
     //-------------------------------------------------------------------
-    // 2. CONSULTA NFC-e (Modelo 65) - Baseado no print de Receipts
+    // 2. CONSULTA NFC-e (Modelo 65) - Endpoint de Receipts (paginado)
     //-------------------------------------------------------------------
     ConOut("[ULOJE001] Iniciando consulta NFC-e (65)...")
-    
-    // Reinicia query e limpa objeto JSON para novo processamento
-    cQuery := ""
-    oJson  := JsonObject():New()
 
-    // Par�metros espec�ficos do endpoint de NFC-e
-    // cQuery := "?fromDateToNow=" + cDataOntem + "%2000:01:00" 
-    cQuery := "?receipt.saleDate=" + cDataOntem 
+    cQuery := "?receipt.saleDate=" + cDataOntem
     cQuery += "&receipt.InvoiceXMLStatus=AUTORIZADA"
 
-    oRest:SetPath(cResNfce + cQuery)
-
-    // Reaproveita os mesmos headers (Bearer Token)
-    If oRest:Get(aHeaders)
-        cResponse := oRest:GetResult()
-        cErro := oJson:FromJson(cResponse)
-        
-        If Empty(cErro)
-            aItems := oJson['items'] // ou o nome da tag que cont�m a lista
-    
-            For nI := 1 To Len(aItems)
-                GravaZKD(aItems[nI],"NFCE",dZKDData)
-            Next nI
-            ConOut("[ULOJE001] NFC-e processadas com sucesso.")
-        Else
-            ConOut("[ULOJE001] Erro JSON NFC-e: " + cErro)
-        EndIf
-    Else
-        ConOut("[ULOJE001] Erro na NFC-e: " + oRest:GetLastError())
+    If ConsultaPag(oRest, cResNfce, cQuery, aHeaders, "NFCE", dZKDData)
+        ConOut("[ULOJE001] NFC-e processadas com sucesso.")
     EndIf
 
 Return
@@ -153,6 +108,100 @@ User Function GETTOKENBOT()
 
 Return cToken
 
+/*/{Protheus.doc} ConsultaPag
+Percorre todas as paginas do endpoint informado (controle via campos start/count/total
+da resposta da API) e grava cada item retornado na ZKD atraves da GravaZKD.
+Renova o token e repete a pagina em caso de falha no GET (ex.: token expirado).
+/*/
+Static Function ConsultaPag(oRest, cResource, cQueryBase, aHeaders, cTipo, dZKDData)
+    Local oJson     := Nil
+    Local aItems    := {}
+    Local cResponse := ""
+    Local cErro     := ""
+    Local cNovoTk   := ""
+    Local nStart    := 0
+    Local nTotal    := 0
+    Local nCount    := 0
+    Local nPagina   := 0
+    Local nMaxPag   := 1000 // Salvaguarda contra laco infinito
+    Local nI        := 0
+    Local lRenovou  := .F.
+    Local lRet      := .T.
+
+    While nPagina < nMaxPag
+        nPagina++
+        oRest:SetPath(cResource + cQueryBase + "&start=" + cValToChar(nStart))
+
+        If !oRest:Get(aHeaders)
+            If !lRenovou
+                // O token pode ter expirado durante o processamento; renova e repete a pagina
+                ConOut("[ULOJE001] Falha no GET " + cTipo + " (start=" + cValToChar(nStart) + "). Renovando token para nova tentativa...")
+                cNovoTk := U_GETTOKENBOT()
+                If !Empty(cNovoTk)
+                    aSize(aHeaders, 0)
+                    AAdd(aHeaders, 'Authorization: Bearer ' + cNovoTk)
+                    AAdd(aHeaders, 'Accept: application/json')
+                EndIf
+                lRenovou := .T.
+                Loop
+            EndIf
+            ConOut("[ULOJE001] Erro na consulta " + cTipo + " (start=" + cValToChar(nStart) + "): " + oRest:GetLastError())
+            lRet := .F.
+            Exit
+        EndIf
+
+        lRenovou := .F. // Sucesso: libera nova renovacao para paginas futuras
+
+        cResponse := oRest:GetResult()
+        oJson     := JsonObject():New()
+        cErro     := oJson:FromJson(cResponse)
+
+        If !Empty(cErro)
+            ConOut("[ULOJE001] Erro JSON " + cTipo + " (start=" + cValToChar(nStart) + "): " + cErro)
+            lRet := .F.
+            Exit
+        EndIf
+
+        nTotal := 0
+        aItems := {}
+
+        If oJson:HasProperty("total")
+            If ValType(oJson["total"]) == "N"
+                nTotal := oJson["total"]
+            EndIf
+        EndIf
+
+        If oJson:HasProperty("items")
+            If ValType(oJson["items"]) == "A"
+                aItems := oJson["items"]
+            EndIf
+        EndIf
+
+        nCount := Len(aItems)
+
+        // Sem total, processa a pagina recebida e encerra de forma controlada
+        If nTotal == 0 .And. nCount > 0
+            nTotal := nStart + nCount
+        EndIf
+
+        ConOut("[ULOJE001] " + cTipo + ": processando registros " + cValToChar(nStart + 1) + " a " + cValToChar(nStart + nCount) + " de " + cValToChar(nTotal) + ".")
+
+        For nI := 1 To nCount
+            GravaZKD(aItems[nI], cTipo, dZKDData)
+        Next nI
+
+        nStart += nCount
+
+        If nCount == 0 .Or. nStart >= nTotal
+            Exit // Ultima pagina alcancada ou resposta vazia
+        EndIf
+    EndDo
+
+    If lRet .And. nPagina >= nMaxPag .And. nStart < nTotal
+        ConOut("[ULOJE001] Atencao: limite de paginas atingido para " + cTipo + ". Importacao possivelmente incompleta (" + cValToChar(nStart) + " de " + cValToChar(nTotal) + ").")
+    EndIf
+Return lRet
+
 Static Function GravaZKD(oItem,cTipo,dZKDData)
     Local oModel    := FWLoadModel("ULOJA001") // Carrega o modelo definido no seu fonte
     Local nOp       := 3 // Opera��o de Inclus�o (MODEL_OPERATION_INSERT)
@@ -161,13 +210,25 @@ Static Function GravaZKD(oItem,cTipo,dZKDData)
     Local cFilDestino := filDestino(oItem['storeId'])
     Local lKey      := Iif(cTipo == "NFE",oItem:HasProperty("key"),oItem:HasProperty("eletronicKey"))
     Local cKey      := Iif(lKey,Iif(cTipo == "NFE",oItem['key'],oItem['eletronicKey']),"")
-    Local cXML      := Iif(lKey,retXml(cKey,lKey),"")
-    Local cView     := retView(oItem,cKey,cXML)
-    Local cCgc      := retCgc(cXML,cKey)
+    Local cXML      := ""
+    Local cView     := ""
+    Local cCgc      := ""
     Local cStXml    := ""
     Local cCanal    := ""
     Local cFPag     := ""
     Local nP        := 0
+
+    // A propriedade pode existir no JSON com valor null (ex.: documento sem chave gerada/autorizada)
+    If ValType(cKey) != "C" .Or. Empty(cKey)
+        lKey := .F.
+        cKey := ""
+    EndIf
+
+    If lKey
+        cXML  := retXml(cKey,lKey)
+        cView := retView(oItem,cKey,cXML)
+        cCgc  := retCgc(cXML,cKey)
+    EndIf
 
     If cTipo == "NFCE"
         cStXml := Iif(oItem:HasProperty("invoiceXMLStatus"),  oItem['invoiceXMLStatus'],  "")
@@ -186,6 +247,17 @@ Static Function GravaZKD(oItem,cTipo,dZKDData)
         cStXml := Iif(oItem:HasProperty("situation"),        oItem['situation'],        "")
         cCanal := Iif(oItem:HasProperty("importType"),       oItem['importType'],       "")
         cFPag  := Iif(oItem:HasProperty("paymentCondition"), oItem['paymentCondition'], "")
+    EndIf
+
+    // Propriedades podem existir no JSON com valor null; normaliza para string vazia
+    If ValType(cStXml) != "C"
+        cStXml := ""
+    EndIf
+    If ValType(cCanal) != "C"
+        cCanal := ""
+    EndIf
+    If ValType(cFPag) != "C"
+        cFPag := ""
     EndIf
 
     If lKey .and. !Empty(cFilDestino) .and. !Empty(cKey) /*TESTE*/ //.and. cKey == "29260114378160001740650270000018831000018846"
@@ -234,7 +306,7 @@ Static Function GravaZKD(oItem,cTipo,dZKDData)
             ConOut("[ULOJE001] Erro na Validacao: " + aErro[4])
         EndIf
     Else
-        ConOut("[ULOJE001] Erro: Propriedade 'key' nao encontrada no item JSON.")
+        ConOut("[ULOJE001] Item ignorado: chave ('key'/'eletronicKey') ausente ou nula no JSON, ou filial de destino nao localizada.")
     EndIf
 
     // Encerra o modelo para liberar mem�ria
@@ -246,10 +318,22 @@ Return lRet
 Dado o storeId da API, localiza a filial correspondente para gravar o registro na tabela ZKD com a filial correta.
 /*/
 Static Function filDestino(nStoreId)
-    Local cStoreId := Padr(AllTrim(Str(nStoreId)), Len(SX5->X5_CHAVE))
+    Local cStoreId := ""
     Local cFilRet  := ""
     Local nPos     := 0
     Local aEmpresas := {}
+
+    // Reinicia a variavel privada para nao reaproveitar o CNPJ do item anterior
+    cCnpjSX5 := ""
+
+    // storeId pode vir nulo ou como texto no JSON
+    If ValType(nStoreId) == "N"
+        cStoreId := Padr(AllTrim(Str(nStoreId)), Len(SX5->X5_CHAVE))
+    ElseIf ValType(nStoreId) == "C"
+        cStoreId := Padr(AllTrim(nStoreId), Len(SX5->X5_CHAVE))
+    Else
+        Return cFilRet
+    EndIf
 
     // 1. Busca o CNPJ na tabela SX5 (Sub-tabela ZX)
     DbSelectArea("SX5")
@@ -294,7 +378,7 @@ Static Function retXml(cKey,lKey)
     Local cWarning   := ""
     Local aSubPastas := {"saida", "importacao"}
 
-    If lKey
+    If lKey .And. ValType(cKey) == "C" .And. !Empty(cKey)
         cKey := Lower(cKey)
         // 1. Localiza a pasta do ID din�mico
         For nI := 1 To Len(aDirID)
