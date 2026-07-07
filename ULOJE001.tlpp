@@ -210,6 +210,7 @@ Static Function GravaZKD(oItem,cTipo,dZKDData)
     Local cFilDestino := filDestino(oItem['storeId'])
     Local lKey      := Iif(cTipo == "NFE",oItem:HasProperty("key"),oItem:HasProperty("eletronicKey"))
     Local cKey      := Iif(lKey,Iif(cTipo == "NFE",oItem['key'],oItem['eletronicKey']),"")
+    Local lJaExiste := .F.
     Local cXML      := ""
     Local cView     := ""
     Local cCgc      := ""
@@ -224,8 +225,18 @@ Static Function GravaZKD(oItem,cTipo,dZKDData)
         cKey := ""
     EndIf
 
-    If lKey
-        cXML  := retXml(cKey,lKey)
+    // Verifica se o registro ja existe antes de decidir se refaz as buscas caras (XML/View/CGC)
+    If lKey .and. !Empty(cFilDestino) .and. !Empty(cKey)
+        lJaExiste := ZKD->(DbSeek(cFilDestino + cKey))
+    EndIf
+
+    If lJaExiste .And. !Empty(ZKD->ZKD_XML) .And. !Empty(ZKD->ZKD_VIEW)
+        // Ja tem XML e View gravados: reaproveita em vez de bater de novo em disco/APIs
+        cXML  := ZKD->ZKD_XML
+        cView := ZKD->ZKD_VIEW
+        cCgc  := ZKD->ZKD_CGC
+    Else
+        cXML  := Iif(lKey,retXml(cKey,lKey),"")
         cView := retView(oItem,cKey,cXML)
         cCgc  := retCgc(cXML,cKey)
     EndIf
@@ -261,8 +272,8 @@ Static Function GravaZKD(oItem,cTipo,dZKDData)
     EndIf
 
     If lKey .and. !Empty(cFilDestino) .and. !Empty(cKey) /*TESTE*/ //.and. cKey == "29260114378160001740650270000018831000018846"
- 
-        If ZKD->(DbSeek(cFilDestino + cKey))
+
+        If lJaExiste
             nOp := 4 // Se achou, muda para Altera��o (MODEL_OPERATION_UPDATE)
             ConOut("[ULOJE001] Registro encontrado. Alterando: " + cKey)
         Else
