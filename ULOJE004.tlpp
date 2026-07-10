@@ -11,6 +11,7 @@ User Function ULOJE004(cAuthCode,cDescPagto,cParamName)
     Local cToken        := AllTrim(SuperGetMv("HV_APIVWTK",,"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhcGlnaW5zZW5nIiwiZXhwIjoxNzg3NDQ4MDY3fQ.GJqcIJBkMIfp_q_KRzgGuAHWWo93j3FWo3TObKqlAwA"))
     Local oJsonRaw      := Nil
     Local oDataNormal   := Nil
+    Local oRest         := Nil
     Default cParamName  := ""
     Default cDescPagto  := "" // Propriedade pode vir com valor null no JSON de origem
 
@@ -30,13 +31,18 @@ User Function ULOJE004(cAuthCode,cDescPagto,cParamName)
         {"/v2/vendas/pagarme",      Iif(!Empty(cParamName),cParamName,"gateway_id"),                           "PAGARME"} ;
     }
 
+    // Cria a conexao uma unica vez e reaproveita nas ate 6 tentativas da cascata,
+    // evitando refazer o handshake TLS a cada chamada
+    oRest := FWRest():New("https://api.grupoginseng.com.br")
+    oRest:SetTimeOut(60)
+
     For nX := 1 To Len(aAPIs)
-        oJsonRaw := ConsultaSetor(aAPIs[nX][1], aAPIs[nX][2], cAuthCode, cToken)
+        oJsonRaw := ConsultaSetor(oRest, aAPIs[nX][1], aAPIs[nX][2], cAuthCode, cToken)
 
         If oJsonRaw != Nil .And. oJsonRaw:HasProperty("items") .And. Len(oJsonRaw["items"]) > 0
             // Encontrou! Agora normalizamos o primeiro item da lista
             oDataNormal := NormalizarData(oJsonRaw["items"], aAPIs[nX][3],lPix)
-            Exit 
+            Exit
         EndIf
     Next nX
 
@@ -112,16 +118,24 @@ Static Function NormalizarData(aItem, cOrigem, lPix)
             Case cOrigem == "PAGARME"
                 // Implementar l�gica PAGARME
             Case cOrigem == "MOOZ"
-                oItem["descricao_pagamento"] := aItem[nX]["captura"] + " - " + UPPER(aItem[nX]["bandeira"])
-                oItem["valor_total"]         := Iif(lPix,aItem[nX]["valor_bruto"],aItem[nX]["valor_bruto_parcela"])
-                oItem["valor_parcela"]       := Iif(lPix, aItem[nX]["valor_liquido"],aItem[nX]["valor_liquido_parcela"])
+                oItem["descricao_pagamento"] := Iif(aItem[nX]:HasProperty("captura"),AllTrim(aItem[nX]["captura"]),"") + " - " + Iif(aItem[nX]:HasProperty("bandeira"),UPPER(AllTrim(aItem[nX]["bandeira"])),"")
+                oItem["valor_total"]         := Iif(lPix, Iif(aItem[nX]:HasProperty("valor_bruto")         .And. ValType(aItem[nX]["valor_bruto"])         == "N", aItem[nX]["valor_bruto"],         0), ;
+                                                           Iif(aItem[nX]:HasProperty("valor_bruto_parcela") .And. ValType(aItem[nX]["valor_bruto_parcela"]) == "N", aItem[nX]["valor_bruto_parcela"], 0))
+                oItem["valor_parcela"]       := Iif(lPix, Iif(aItem[nX]:HasProperty("valor_liquido")         .And. ValType(aItem[nX]["valor_liquido"])         == "N", aItem[nX]["valor_liquido"],         0), ;
+                                                           Iif(aItem[nX]:HasProperty("valor_liquido_parcela") .And. ValType(aItem[nX]["valor_liquido_parcela"]) == "N", aItem[nX]["valor_liquido_parcela"], 0))
                 oItem["valor_desconto"]      := oItem["valor_total"]-oItem["valor_parcela"]//Iif(lPix, aItem[nX]["valor_mdr"])
-                oItem["percentual_desconto"] := ROUND((oItem["valor_desconto"] / oItem["valor_total"]) * 100, 2)
+                If oItem["valor_total"] > 0
+                    oItem["percentual_desconto"] := ROUND((oItem["valor_desconto"] / oItem["valor_total"]) * 100, 2)
+                EndIf
                 If lPix
-                    oItem["vencimento"]      := STOD(StrTran(SubStr(aItem[nX]["data_venda"],1,10),"-",""))+1
+                    If aItem[nX]:HasProperty("data_venda") .And. !Empty(aItem[nX]["data_venda"])
+                        oItem["vencimento"]  := STOD(StrTran(SubStr(aItem[nX]["data_venda"],1,10),"-",""))+1
+                    EndIf
                 Else
-                    oItem["vencimento"]      := STOD(StrTran(SubStr(aItem[nX]["data_prevista_parcela"],1,10),"-",""))
-                EndIf                
+                    If aItem[nX]:HasProperty("data_prevista_parcela") .And. !Empty(aItem[nX]["data_prevista_parcela"])
+                        oItem["vencimento"]  := STOD(StrTran(SubStr(aItem[nX]["data_prevista_parcela"],1,10),"-",""))
+                    EndIf
+                EndIf
         EndCase
 
         // 3. Adiciona o objeto preenchido ao array "financeiro"
@@ -129,8 +143,7 @@ Static Function NormalizarData(aItem, cOrigem, lPix)
     Next nX
 Return oRet
 
-Static Function ConsultaSetor(cPath, cParamName, cValue, cToken)
-    Local oRest     := FWRest():New("https://api.grupoginseng.com.br")
+Static Function ConsultaSetor(oRest, cPath, cParamName, cValue, cToken)
     Local cQuery    := "?" + cParamName + "=" + cValue
     Local aHeaders  := {}
     Local oRetJson  := JsonObject():New()
@@ -140,7 +153,6 @@ Static Function ConsultaSetor(cPath, cParamName, cValue, cToken)
     AAdd(aHeaders, 'Accept: application/json')
 
     oRest:SetPath(cPath + cQuery)
-    oRest:SetTimeOut(60)
 
     If oRest:Get(aHeaders)
         cResponse := oRest:GetResult()

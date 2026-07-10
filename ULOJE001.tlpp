@@ -938,13 +938,15 @@ Return
 Job para preparar o ambiente, configurar o RPC e chamar a fun��o principal de consulta e grava��o dos documentos fiscais.
 /*/
 User Function JLOJE001()
-    Local dDataProc := SToD("20260101") 
+    Local dDataProc := SToD("20260107") // Data inicial do lote - ajuste aqui para mudar o ponto de partida
+    Local nDiasLote := 30               // Quantidade de dias a processar a partir da data inicial
+    Local dDataFim  := dDataProc + nDiasLote - 1
 
     ConOut("[JLOJE001] Prerando ambiente.")
     RpcSetEnv("01","010101")
     ConOut("[JLOJE001] Ambiente configurado "+cFilAnt+".")
-    
-    While dDataProc <> Date()
+
+    While dDataProc <= dDataFim
         U_ULOJE001(dDataProc)
         dDataProc += 1
     EndDO
