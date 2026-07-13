@@ -237,7 +237,7 @@ Static Function GravaZKD(oItem,cTipo,dZKDData)
         cCgc  := ZKD->ZKD_CGC
     Else
         cXML  := Iif(lKey,retXml(cKey,lKey),"")
-        cView := retView(oItem,cKey,cXML)
+        cView := MontaView(oItem,cKey,cXML)
         cCgc  := retCgc(cXML,cKey)
     EndIf
 
@@ -601,6 +601,335 @@ Static Function retView(oJson,cNumDoc,cXML)
     EndIf
 Return cView
 
+/*/{Protheus.doc} MontaView
+Monta a view financeira agregando TODOS os pagamentos do documento (substitui a
+antiga retView, que parava no primeiro pagamento encontrado).
+
+Regras:
+- NF-e: reconciliacao por Pedido Site (observation) / orderNumber / externalId
+  (o financeiro ja volta com todas as parcelas em uma unica chamada).
+- NFC-e: percorre TODOS os payments, sem parar no primeiro, e agrega cada view.
+  PIX sem codigo rastreavel e buscado por atributo (merchant + valor + data).
+- Dinheiro (NFC-e): preenchido direto do documento, pois nao vem de nenhuma API.
+- Retorno vazio ("") mantem o fallback por payments existente na ULOJE002.
+/*/
+Static Function MontaView(oJson,cNumDoc,cXML)
+    Local cView       := ""
+    Local aItens      := {}
+    Local aFinAll     := {}
+    Local oFin        := Nil
+    Local oFinanceiro := Nil
+    Local nX          := 0
+    Local cIdSite     := ""
+    Local cDescPg     := ""
+    Local aCauts      := {}
+    Local cMerch      := ""
+    Local lDocLevel   := .F.
+    Default cXML      := ""
+
+    If oJson:HasProperty("items") .And. ValType(oJson["items"]) == "A"
+        aItens := oJson["items"]
+    EndIf
+
+    // 1) Nivel documento: Pedido Site (observation) - OMNI
+    If oJson:HasProperty("observation") .And. ValType(oJson["observation"]) == "C"
+        cIdSite := ExtraiIdSite(oJson["observation"])
+        If !Empty(cIdSite)
+            oFin := U_ULOJE004(cIdSite, "")
+            If oFin != Nil
+                AddFinView(aFinAll, oFin)
+                lDocLevel := .T.
+            EndIf
+        EndIf
+    EndIf
+
+    // 1.5) NF-e cartao: o cAut esta no <pag> do XML (JSON de NF-e nao tem payments).
+    //       Reconcilia na Mooz por merchant + authorization_code, ANTES do orderNumber,
+    //       porque venda no cartao nao esta na API de pedidos.
+    If !lDocLevel .And. !(oJson:HasProperty("payments") .And. ValType(oJson["payments"]) == "A")
+        cMerch := MerchantId(oJson)
+        aCauts := CautsXml(cXML)
+        For nX := 1 To Len(aCauts)
+            If !Empty(aCauts[nX]) .And. !Empty(cMerch)
+                oFin := U_ULOJE004MZ(aCauts[nX], cMerch)
+                If oFin != Nil
+                    AddFinView(aFinAll, oFin)
+                    lDocLevel := .T.
+                EndIf
+            EndIf
+        Next nX
+    EndIf
+
+    // 2) Nivel documento: orderNumber (pedido de venda)
+    If !lDocLevel
+        For nX := 1 To Len(aItens)
+            If aItens[nX]:HasProperty("orderNumber") .And. !Empty(aItens[nX]["orderNumber"])
+                oFin := U_ULOJE004(aItens[nX]["orderNumber"], "")
+                If oFin != Nil
+                    AddFinView(aFinAll, oFin)
+                    lDocLevel := .T.
+                    Exit
+                EndIf
+            EndIf
+        Next nX
+    EndIf
+
+    // 3) Nivel documento: externalId (OMNI)
+    If !lDocLevel .And. oJson:HasProperty("externalId") .And. ValType(oJson["externalId"]) == "C" .And. !Empty(oJson["externalId"]) .And. oJson:HasProperty("payments") .And. ValType(oJson["payments"]) == "A"
+        cDescPg := DescPrimeiroPag(oJson)
+        If !Empty(cDescPg)
+            oFin := U_ULOJE004(StrTran(oJson["externalId"], "-F1", ""), cDescPg)
+            If oFin != Nil
+                AddFinView(aFinAll, oFin)
+                lDocLevel := .T.
+            EndIf
+        EndIf
+    EndIf
+
+    // 4) Nivel pagamento (NFC-e): percorre TODOS os payments, sem parar no primeiro
+    If !lDocLevel .And. oJson:HasProperty("payments") .And. ValType(oJson["payments"]) == "A"
+        For nX := 1 To Len(oJson["payments"])
+            oFin := ViewDoPagamento(oJson, oJson["payments"][nX], cXML)
+            If oFin != Nil
+                AddFinView(aFinAll, oFin)
+            EndIf
+        Next nX
+    EndIf
+
+    // 5) Dinheiro: nao vem de API, preenche direto do documento (apenas NFC-e nesta etapa)
+    AddDinheiro(aFinAll, oJson)
+
+    // Monta retorno (vazio mantem o fallback da ULOJE002 por payments)
+    If Len(aFinAll) > 0
+        oFinanceiro := JsonObject():New()
+        oFinanceiro["financeiro"] := aFinAll
+        cView := oFinanceiro:toJson()
+    EndIf
+Return cView
+
+// Anexa ao acumulador todas as entradas "financeiro" de uma view retornada pela API
+Static Function AddFinView(aFinAll, oFin)
+    Local nX := 0
+    If oFin != Nil .And. oFin:HasProperty("financeiro") .And. ValType(oFin["financeiro"]) == "A"
+        For nX := 1 To Len(oFin["financeiro"])
+            aAdd(aFinAll, oFin["financeiro"][nX])
+        Next nX
+    EndIf
+Return
+
+// Retorna a descricao do primeiro pagamento com paymentMethodDescription preenchido
+Static Function DescPrimeiroPag(oJson)
+    Local cDesc := ""
+    Local nX    := 0
+    If oJson:HasProperty("payments") .And. ValType(oJson["payments"]) == "A"
+        For nX := 1 To Len(oJson["payments"])
+            If oJson["payments"][nX]:HasProperty("paymentMethodDescription") .And. ValType(oJson["payments"][nX]["paymentMethodDescription"]) == "C" .And. !Empty(oJson["payments"][nX]["paymentMethodDescription"])
+                cDesc := oJson["payments"][nX]["paymentMethodDescription"]
+                Exit
+            EndIf
+        Next nX
+    EndIf
+Return cDesc
+
+// Reconcilia UM pagamento (NFC-e).
+// Cartao: busca por codigo (authorizationNsu / cardAuthorization).
+// PIX: busca na Mooz por idPix (authorization_code) e, como reserva, por atributo
+//      (merchant + valor + data). NAO passa pela cascata generica da U_ULOJE004,
+//      que consultaria /v2/pedidos e traria pedidos aleatorios (ex.: nsu "000019").
+Static Function ViewDoPagamento(oJson, oPag, cXML)
+    Local oFin       := Nil
+    Local cDesc      := ""
+    Local cMerchant  := MerchantId(oJson)
+    Local cDataVenda := DataVenda(oJson)
+    Local cIdPix     := ""
+    Local nValor     := 0
+
+    If oPag:HasProperty("paymentMethodDescription") .And. ValType(oPag["paymentMethodDescription"]) == "C"
+        cDesc := oPag["paymentMethodDescription"]
+    EndIf
+    If oPag:HasProperty("value") .And. ValType(oPag["value"]) == "N"
+        nValor := oPag["value"]
+    EndIf
+
+    If EhPix(oPag)
+        // PIX -> Mooz por idPix (authorization_code embutido no XML)
+        cIdPix := IdPixXml(cXML)
+        If !Empty(cIdPix) .And. !Empty(cMerchant)
+            oFin := U_ULOJE004MZ(cIdPix, cMerchant)
+        EndIf
+        // Reserva: busca por atributo (merchant + valor + data)
+        If oFin == Nil .And. !Empty(cMerchant) .And. !Empty(cDataVenda) .And. nValor > 0
+            oFin := U_ULOJE004MZATR(cMerchant, cDataVenda, nValor)
+        EndIf
+    Else
+        // Cartao credito/debito: por authorizationNsu, depois cardAuthorization
+        If oPag:HasProperty("authorizationNsu") .And. !Empty(oPag["authorizationNsu"])
+            oFin := U_ULOJE004(oPag["authorizationNsu"], cDesc)
+        EndIf
+        If oFin == Nil .And. oPag:HasProperty("cardAuthorization") .And. !Empty(oPag["cardAuthorization"])
+            oFin := U_ULOJE004(oPag["cardAuthorization"], cDesc, "authorization_code")
+        EndIf
+    EndIf
+Return oFin
+
+// Identifica se o pagamento e PIX (pela bandeira ou pela descricao)
+Static Function EhPix(oPag)
+    Local lPix := .F.
+    If oPag:HasProperty("cardFlagDescription") .And. ValType(oPag["cardFlagDescription"]) == "C"
+        lPix := "PIX" $ Upper(oPag["cardFlagDescription"])
+    EndIf
+    If !lPix .And. oPag:HasProperty("paymentMethodDescription") .And. ValType(oPag["paymentMethodDescription"]) == "C"
+        lPix := "PIX" $ Upper(oPag["paymentMethodDescription"])
+    EndIf
+Return lPix
+
+// Merchant id (storeId com 8 posicoes, preenchido com zeros a esquerda)
+Static Function MerchantId(oJson)
+    Local cRet := ""
+    If oJson:HasProperty("storeId") .And. oJson["storeId"] != Nil
+        cRet := PadL(AllTrim(cValToChar(oJson["storeId"])), 8, "0")
+    EndIf
+Return cRet
+
+// Data da venda no formato YYYY-MM-DD (saleDate para NFC-e, emissionDate para NF-e)
+Static Function DataVenda(oJson)
+    Local cData := ""
+    If oJson:HasProperty("saleDate") .And. ValType(oJson["saleDate"]) == "C"
+        cData := SubStr(oJson["saleDate"], 1, 10)
+    ElseIf oJson:HasProperty("emissionDate") .And. ValType(oJson["emissionDate"]) == "C"
+        cData := SubStr(oJson["emissionDate"], 1, 10)
+    EndIf
+Return cData
+
+// Acrescenta o dinheiro (NFC-e) direto do documento; liquido = bruto, sem taxa
+Static Function AddDinheiro(aFinAll, oJson)
+    Local nX     := 0
+    Local nValor := 0
+    Local cDesc  := ""
+    Local cVenc  := StrTran(DataVenda(oJson), "-", "/")
+
+    // NF-e (dinheiro no <pag> do XML) sera tratado na etapa 2, junto da validacao,
+    // pois interfere na contagem de parcelas da condicao de pagamento (retCond).
+    If oJson:HasProperty("payments") .And. ValType(oJson["payments"]) == "A"
+        For nX := 1 To Len(oJson["payments"])
+            cDesc := ""
+            If oJson["payments"][nX]:HasProperty("paymentMethodDescription") .And. ValType(oJson["payments"][nX]["paymentMethodDescription"]) == "C"
+                cDesc := oJson["payments"][nX]["paymentMethodDescription"]
+            EndIf
+            If "DINHEIRO" $ Upper(AllTrim(cDesc))
+                nValor := 0
+                If oJson["payments"][nX]:HasProperty("value") .And. ValType(oJson["payments"][nX]["value"]) == "N"
+                    nValor := oJson["payments"][nX]["value"]
+                EndIf
+                If nValor > 0
+                    aAdd(aFinAll, EntradaDinheiro(cDesc, nValor, cVenc))
+                EndIf
+            EndIf
+        Next nX
+    EndIf
+Return
+
+// Monta uma entrada "financeiro" para dinheiro (mesma estrutura da NormalizarData)
+Static Function EntradaDinheiro(cDesc, nValor, cVenc)
+    Local oItem := JsonObject():New()
+    oItem["descricao_pagamento"] := cDesc
+    oItem["valor_total"]         := nValor
+    oItem["valor_parcela"]       := nValor
+    oItem["valor_desconto"]      := 0
+    oItem["percentual_desconto"] := 0
+    oItem["vencimento"]          := cVenc
+    oItem["origem_api"]          := "DOCUMENTO"
+Return oItem
+
+// Extrai o idPix das observacoes de contribuinte (obsCont) do XML
+Static Function IdPixXml(cXML)
+    Local cRet     := ""
+    Local cError   := ""
+    Local cWarning := ""
+    Local oXml     := Nil
+    Local oObs     := Nil
+    Local nY       := 0
+
+    If Empty(cXML)
+        Return ""
+    EndIf
+
+    oXml := XmlParser(cXML, "_", @cError, @cWarning)
+    If oXml == Nil
+        Return ""
+    EndIf
+
+    If !AttIsMemberOf(oXml, "_NFEPROC") .Or. !AttIsMemberOf(oXml:_NFEPROC, "_NFE")
+        Return ""
+    EndIf
+    If !AttIsMemberOf(oXml:_NFEPROC:_NFE, "_INFNFE") .Or. !AttIsMemberOf(oXml:_NFEPROC:_NFE:_INFNFE, "_INFADIC")
+        Return ""
+    EndIf
+    If !AttIsMemberOf(oXml:_NFEPROC:_NFE:_INFNFE:_INFADIC, "_OBSCONT")
+        Return ""
+    EndIf
+
+    oObs := oXml:_NFEPROC:_NFE:_INFNFE:_INFADIC:_OBSCONT
+
+    If ValType(oObs) == "A"
+        For nY := 1 To Len(oObs)
+            If AttIsMemberOf(oObs[nY], "_XCAMPO") .And. oObs[nY]:_XCAMPO:TEXT == "idPix" .And. AttIsMemberOf(oObs[nY], "_XTEXTO")
+                cRet := oObs[nY]:_XTEXTO:TEXT
+                Exit
+            EndIf
+        Next nY
+    Else
+        If AttIsMemberOf(oObs, "_XCAMPO") .And. oObs:_XCAMPO:TEXT == "idPix" .And. AttIsMemberOf(oObs, "_XTEXTO")
+            cRet := oObs:_XTEXTO:TEXT
+        EndIf
+    EndIf
+Return cRet
+
+// Retorna um array com o cAut de cada detPag (cartao) do <pag> do XML
+Static Function CautsXml(cXML)
+    Local aRet     := {}
+    Local cError   := ""
+    Local cWarning := ""
+    Local oXml     := Nil
+    Local oRaiz    := Nil
+    Local oInf     := Nil
+    Local uDet     := Nil
+    Local cCaut    := ""
+    Local nX       := 0
+
+    If Empty(cXML)
+        Return aRet
+    EndIf
+
+    oXml := XmlParser(cXML, "_", @cError, @cWarning)
+    If oXml == Nil
+        Return aRet
+    EndIf
+
+    oRaiz := Iif(AttIsMemberOf(oXml, "_NFEPROC"), oXml:_NFEPROC, oXml)
+
+    If AttIsMemberOf(oRaiz, "_NFE") .And. AttIsMemberOf(oRaiz:_NFE, "_INFNFE")
+        oInf := oRaiz:_NFE:_INFNFE
+    EndIf
+
+    If oInf != Nil .And. AttIsMemberOf(oInf, "_PAG") .And. AttIsMemberOf(oInf:_PAG, "_DETPAG")
+        uDet := oInf:_PAG:_DETPAG
+        If ValType(uDet) == "A"
+            For nX := 1 To Len(uDet)
+                cCaut := CautDetPag(uDet[nX])
+                If !Empty(cCaut)
+                    aAdd(aRet, cCaut)
+                EndIf
+            Next nX
+        Else
+            cCaut := CautDetPag(uDet)
+            If !Empty(cCaut)
+                aAdd(aRet, cCaut)
+            EndIf
+        EndIf
+    EndIf
+Return aRet
+
 Static Function RetCautXml(cXML)
     Local cError    := ""
     Local cWarning  := ""
@@ -938,7 +1267,7 @@ Return
 Job para preparar o ambiente, configurar o RPC e chamar a fun��o principal de consulta e grava��o dos documentos fiscais.
 /*/
 User Function JLOJE001()
-    Local dDataProc := SToD("20260107") // Data inicial do lote - ajuste aqui para mudar o ponto de partida
+    Local dDataProc := SToD("20260112") // Data inicial do lote - ajuste aqui para mudar o ponto de partida
     Local nDiasLote := 30               // Quantidade de dias a processar a partir da data inicial
     Local dDataFim  := dDataProc + nDiasLote - 1
 

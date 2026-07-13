@@ -184,3 +184,59 @@ Static Function ConsultaMooz(cMerchantId, cAuthCode, cToken)
     EndIf
 
 Return oRetJson
+
+/*/{Protheus.doc} ULOJE004MZATR
+Busca vendas Mooz por atributo (merchant_id + data_venda + valor_bruto + origem=PIX),
+para pagamentos PIX que nao possuem codigo de autorizacao rastreavel no documento fiscal.
+Em caso de multiplos registros usa o primeiro (o valor liquido e identico entre duplicados).
+/*/
+User Function ULOJE004MZATR(cMerchantId, cDataVenda, nValor)
+    Local cToken      := AllTrim(SuperGetMv("HV_APIVWTK",,"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhcGlnaW5zZW5nIiwiZXhwIjoxNzg3NDQ4MDY3fQ.GJqcIJBkMIfp_q_KRzgGuAHWWo93j3FWo3TObKqlAwA"))
+    Local oJsonRaw    := Nil
+    Local oDataNormal := Nil
+    Local aUmItem     := {}
+
+    If !Empty(cMerchantId) .And. !Empty(cDataVenda) .And. nValor > 0
+        oJsonRaw := ConsultaMoozAtr(cMerchantId, cDataVenda, nValor, cToken)
+
+        If oJsonRaw != Nil .And. oJsonRaw:HasProperty("items") .And. Len(oJsonRaw["items"]) > 0
+            If Len(oJsonRaw["items"]) > 1
+                ConOut("[ULOJE004MZATR] Multiplos registros PIX para merchant [" + cMerchantId + "] data [" + cDataVenda + "] valor [" + AllTrim(Str(nValor,15,2)) + "]. Usando o primeiro.")
+            EndIf
+            // Usa somente o primeiro registro (o valor liquido e identico entre duplicados)
+            aAdd(aUmItem, oJsonRaw["items"][1])
+            oDataNormal := NormalizarData(aUmItem, "MOOZ", .T.)
+        EndIf
+    EndIf
+Return oDataNormal
+
+Static Function ConsultaMoozAtr(cMerchantId, cDataVenda, nValor, cToken)
+    Local oRest     := FWRest():New("https://api.grupoginseng.com.br")
+    Local cValor    := AllTrim(Str(nValor, 15, 2))
+    Local cQuery    := ""
+    Local aHeaders  := {}
+    Local oRetJson  := JsonObject():New()
+    Local cResponse := ""
+
+    cQuery := "?page=1&page_size=50"
+    cQuery += "&origem=PIX"
+    cQuery += "&merchant_id=" + cMerchantId
+    cQuery += "&data_venda_from=" + cDataVenda
+    cQuery += "&data_venda_to=" + cDataVenda
+    cQuery += "&valor_bruto_min=" + cValor
+    cQuery += "&valor_bruto_max=" + cValor
+    cQuery += "&sort_by=data_venda&sort_order=desc"
+
+    AAdd(aHeaders, 'Authorization: Bearer ' + cToken)
+    AAdd(aHeaders, 'Accept: application/json')
+
+    oRest:SetPath("/v2/vendas/mooz" + cQuery)
+    oRest:SetTimeOut(60)
+
+    If oRest:Get(aHeaders)
+        cResponse := oRest:GetResult()
+        oRetJson:FromJson(cResponse)
+    Else
+        oRetJson := Nil
+    EndIf
+Return oRetJson
