@@ -501,17 +501,18 @@ Static Function retView(oJson,cNumDoc,cXML)
             EndIf
         Next
     EndIf
-    // Consulta por authorizationNsu
+    // Consulta por authorizationNsu (nao se aplica a PIX: NSU nao identifica a transacao PIX de forma confiavel, usa-se o idPix do XML mais abaixo)
     If oFinanceiro == Nil
         If oJson:Hasproperty("payments")
             For nX := 1 to Len(oJson["payments"])
-                If oJson["payments"][nX]:Hasproperty("authorizationNsu")		
+                If oJson["payments"][nX]:Hasproperty("authorizationNsu") .And. !("PIX" $ Upper(AllTrim(oJson["payments"][nX]["paymentMethodDescription"])))
                     If !Empty(oJson["payments"][nX]["authorizationNsu"]) /*TESTE*/ //.and. oJson["id"] == "002469-027-1768014000000-23702"
-                        oFinanceiro := U_ULOJE004(oJson["payments"][nX]["authorizationNsu"],oJson["payments"][nX]["paymentMethodDescription"])
+                        // NSU nao e numero de pedido; pula a API de Pedidos para evitar falso positivo
+                        oFinanceiro := U_ULOJE004(oJson["payments"][nX]["authorizationNsu"],oJson["payments"][nX]["paymentMethodDescription"],,.F.)
                         If oFinanceiro != Nil
                             exit
                         Else
-                            oFinanceiro := U_ULOJE004(oJson["payments"][nX]["cardAuthorization"],oJson["payments"][nX]["paymentMethodDescription"],"authorization_code")
+                            oFinanceiro := U_ULOJE004(oJson["payments"][nX]["cardAuthorization"],oJson["payments"][nX]["paymentMethodDescription"],"authorization_code",.F.)
                             If oFinanceiro != Nil
                                 exit
                             Else
@@ -529,7 +530,8 @@ Static Function retView(oJson,cNumDoc,cXML)
             For nX := 1 to Len(oJson["payments"])
                 If oJson["payments"][nX]:Hasproperty("paymentMethodDescription")
                     If !Empty(oJson["externalId"]) .and. !Empty(oJson["payments"][nX]["paymentMethodDescription"])
-                        oFinanceiro := U_ULOJE004(StrTran(oJson["externalId"],"-F1",""),oJson["payments"][nX]["paymentMethodDescription"])
+                        // externalId (OMNI) nao e numero de pedido; pula a API de Pedidos para evitar falso positivo
+                        oFinanceiro := U_ULOJE004(StrTran(oJson["externalId"],"-F1",""),oJson["payments"][nX]["paymentMethodDescription"],,.F.)
                         If oFinanceiro != Nil
                             exit
                         Else
@@ -558,7 +560,8 @@ Static Function retView(oJson,cNumDoc,cXML)
                                                         If Len(oXml:_NFEPROC:_NFE:_INFNFE:_INFADIC:_OBSCONT) > 0
                                                             For nY := 1 to Len(oXml:_NFEPROC:_NFE:_INFNFE:_INFADIC:_OBSCONT)
                                                                 If oXml:_NFEPROC:_NFE:_INFNFE:_INFADIC:_OBSCONT[nY]:_XCAMPO:TEXT == "idPix"
-                                                                    oFinanceiro := U_ULOJE004(oXml:_NFEPROC:_NFE:_INFNFE:_INFADIC:_OBSCONT[nY]:_XTEXTO:TEXT,oJson["payments"][nX]["paymentMethodDescription"])
+                                                                    // idPix nao e numero de pedido; pula a API de Pedidos para evitar falso positivo
+                                                                    oFinanceiro := U_ULOJE004(oXml:_NFEPROC:_NFE:_INFNFE:_INFADIC:_OBSCONT[nY]:_XTEXTO:TEXT,oJson["payments"][nX]["paymentMethodDescription"],,.F.)
                                                                     If oFinanceiro != Nil
                                                                         exit
                                                                     Else
@@ -1267,7 +1270,7 @@ Return
 Job para preparar o ambiente, configurar o RPC e chamar a fun��o principal de consulta e grava��o dos documentos fiscais.
 /*/
 User Function JLOJE001()
-    Local dDataProc := SToD("20260112") // Data inicial do lote - ajuste aqui para mudar o ponto de partida
+    Local dDataProc := SToD("20260101") // Data inicial do lote - ajuste aqui para mudar o ponto de partida
     Local nDiasLote := 30               // Quantidade de dias a processar a partir da data inicial
     Local dDataFim  := dDataProc + nDiasLote - 1
 

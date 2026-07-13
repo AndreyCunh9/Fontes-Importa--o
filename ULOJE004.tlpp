@@ -4,7 +4,7 @@
 /*/{Protheus.doc} ULOJE004
 Busca em cascata e retorna um objeto normalizado.
 /*/
-User Function ULOJE004(cAuthCode,cDescPagto,cParamName)
+User Function ULOJE004(cAuthCode,cDescPagto,cParamName,lTentaPedidos)
     Local lPix          := .F.
     Local aAPIs         := {}
     Local nX            := 0
@@ -12,8 +12,9 @@ User Function ULOJE004(cAuthCode,cDescPagto,cParamName)
     Local oJsonRaw      := Nil
     Local oDataNormal   := Nil
     Local oRest         := Nil
-    Default cParamName  := ""
-    Default cDescPagto  := "" // Propriedade pode vir com valor null no JSON de origem
+    Default cParamName    := ""
+    Default cDescPagto    := "" // Propriedade pode vir com valor null no JSON de origem
+    Default lTentaPedidos := .T. // .F. quando o identificador NAO e um numero de pedido (ex.: NSU, authorization_code, idPix)
 
     // Sem codigo de autorizacao valido nao ha o que consultar nas APIs
     If ValType(cAuthCode) != "C" .Or. Empty(cAuthCode)
@@ -22,13 +23,12 @@ User Function ULOJE004(cAuthCode,cDescPagto,cParamName)
 
     lPix := "PIX" $ UPPER(cDescPagto)
 
+    // Rede, Mulvipay e Pagarme removidas da cascata: sem tratamento em NormalizarData,
+    // a consulta so gastava tempo a toa. Reativar aqui se forem implementadas.
     aAPIs      := { ;
         {"/v2/pedidos",             Iif(!Empty(cParamName),cParamName,"numero_pedido"),                        "PEDIDOS"}, ;
-        {"/v2/vendas/rede",         Iif(!Empty(cParamName),cParamName,"authorization_code"),                   "REDE"}, ;
         {"/v2/vendas/mooz",         Iif(!Empty(cParamName),cParamName,Iif(lPix,"authorization_code","nsu")),   "MOOZ"}, ;
-        {"/v2/vendas/mulvipay",     Iif(!Empty(cParamName),cParamName,"cd_autorizacao"),                       "MULVIPAY"}, ;
-        {"/v2/vendas/omni",         Iif(!Empty(cParamName),cParamName,"order_id"),                             "OMNI"}, ;
-        {"/v2/vendas/pagarme",      Iif(!Empty(cParamName),cParamName,"gateway_id"),                           "PAGARME"} ;
+        {"/v2/vendas/omni",         Iif(!Empty(cParamName),cParamName,"order_id"),                             "OMNI"} ;
     }
 
     // Cria a conexao uma unica vez e reaproveita nas ate 6 tentativas da cascata,
@@ -37,6 +37,12 @@ User Function ULOJE004(cAuthCode,cDescPagto,cParamName)
     oRest:SetTimeOut(60)
 
     For nX := 1 To Len(aAPIs)
+        // Pedidos so faz sentido quando o valor pesquisado e realmente um numero de pedido;
+        // NSU/authorization_code/idPix pertencem a outro espaco de identificadores e geram falsos positivos
+        If aAPIs[nX][3] == "PEDIDOS" .And. !lTentaPedidos
+            Loop
+        EndIf
+
         oJsonRaw := ConsultaSetor(oRest, aAPIs[nX][1], aAPIs[nX][2], cAuthCode, cToken)
 
         If oJsonRaw != Nil .And. oJsonRaw:HasProperty("items") .And. Len(oJsonRaw["items"]) > 0
@@ -119,10 +125,8 @@ Static Function NormalizarData(aItem, cOrigem, lPix)
                 // Implementar l�gica PAGARME
             Case cOrigem == "MOOZ"
                 oItem["descricao_pagamento"] := Iif(aItem[nX]:HasProperty("captura"),AllTrim(aItem[nX]["captura"]),"") + " - " + Iif(aItem[nX]:HasProperty("bandeira"),UPPER(AllTrim(aItem[nX]["bandeira"])),"")
-                oItem["valor_total"]         := Iif(lPix, Iif(aItem[nX]:HasProperty("valor_bruto")         .And. ValType(aItem[nX]["valor_bruto"])         == "N", aItem[nX]["valor_bruto"],         0), ;
-                                                           Iif(aItem[nX]:HasProperty("valor_bruto_parcela") .And. ValType(aItem[nX]["valor_bruto_parcela"]) == "N", aItem[nX]["valor_bruto_parcela"], 0))
-                oItem["valor_parcela"]       := Iif(lPix, Iif(aItem[nX]:HasProperty("valor_liquido")         .And. ValType(aItem[nX]["valor_liquido"])         == "N", aItem[nX]["valor_liquido"],         0), ;
-                                                           Iif(aItem[nX]:HasProperty("valor_liquido_parcela") .And. ValType(aItem[nX]["valor_liquido_parcela"]) == "N", aItem[nX]["valor_liquido_parcela"], 0))
+                oItem["valor_total"]         := Iif(lPix, NumProp(aItem[nX],"valor_bruto"),   NumProp(aItem[nX],"valor_bruto_parcela"))
+                oItem["valor_parcela"]       := Iif(lPix, NumProp(aItem[nX],"valor_liquido"), NumProp(aItem[nX],"valor_liquido_parcela"))
                 oItem["valor_desconto"]      := oItem["valor_total"]-oItem["valor_parcela"]//Iif(lPix, aItem[nX]["valor_mdr"])
                 If oItem["valor_total"] > 0
                     oItem["percentual_desconto"] := ROUND((oItem["valor_desconto"] / oItem["valor_total"]) * 100, 2)
@@ -142,6 +146,24 @@ Static Function NormalizarData(aItem, cOrigem, lPix)
         aAdd(oRet["financeiro"], oItem)
     Next nX
 Return oRet
+
+/*/{Protheus.doc} NumProp
+Le uma propriedade numerica de um item de JSON, aceitando tanto number quanto
+string (algumas APIs serializam valor monetario como texto). Retorna 0 se a
+propriedade nao existir ou nao puder ser convertida.
+/*/
+Static Function NumProp(oItem, cProp)
+    Local nRet := 0
+
+    If oItem:HasProperty(cProp)
+        If ValType(oItem[cProp]) == "N"
+            nRet := oItem[cProp]
+        ElseIf ValType(oItem[cProp]) == "C"
+            nRet := Val(StrTran(oItem[cProp], ",", "."))
+        EndIf
+    EndIf
+
+Return nRet
 
 Static Function ConsultaSetor(oRest, cPath, cParamName, cValue, cToken)
     Local cQuery    := "?" + cParamName + "=" + cValue
