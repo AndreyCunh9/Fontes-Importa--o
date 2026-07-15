@@ -57,16 +57,22 @@ Return oDataNormal
 /*/{Protheus.doc} ULOJE004MZ
 Busca vendas Mooz por merchant_id + authorization_code e retorna objeto normalizado.
 /*/
-User Function ULOJE004MZ(cAuthCode,cMerchantId)
+User Function ULOJE004MZ(cAuthCode,cMerchantId,lPix)
     Local cToken        := AllTrim(SuperGetMv("HV_APIVWTK",,"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhcGlnaW5zZW5nIiwiZXhwIjoxNzg3NDQ4MDY3fQ.GJqcIJBkMIfp_q_KRzgGuAHWWo93j3FWo3TObKqlAwA"))
     Local oJsonRaw      := Nil
     Local oDataNormal   := Nil
+    Default lPix        := .F.
 
     If !Empty(cAuthCode) .And. !Empty(cMerchantId)
         oJsonRaw := ConsultaMooz(cMerchantId, cAuthCode, cToken)
 
         If oJsonRaw != Nil .And. oJsonRaw:HasProperty("items") .And. Len(oJsonRaw["items"]) > 0
-            oDataNormal := NormalizarData(oJsonRaw["items"], "MOOZ", .F.)
+            // Auto-detecta PIX pela bandeira do registro (PIX usa valor_bruto/valor_liquido/data_venda;
+            // cartao usa os campos *_parcela). Sem isso, PIX vinha com valores zerados.
+            If !lPix .And. oJsonRaw["items"][1]:HasProperty("bandeira") .And. ValType(oJsonRaw["items"][1]["bandeira"]) == "C"
+                lPix := "PIX" $ Upper(oJsonRaw["items"][1]["bandeira"])
+            EndIf
+            oDataNormal := NormalizarData(oJsonRaw["items"], "MOOZ", lPix)
         EndIf
     EndIf
 
@@ -100,26 +106,32 @@ Static Function NormalizarData(aItem, cOrigem, lPix)
         Do Case
             Case cOrigem == "PEDIDOS"
                 oItem["descricao_pagamento"] := "PIX_COBRANCA"//aItem[nX]["PaymentType"]
-                oItem["valor_total"]         := aItem[nX]["ValorTotal"]
-                oItem["valor_parcela"]       := aItem[nX]["ValorLiquido"]
-                oItem["valor_desconto"]      := aItem[nX]["TaxaAdm"]
+                oItem["valor_total"]         := NumProp(aItem[nX], "ValorTotal")
+                oItem["valor_parcela"]       := NumProp(aItem[nX], "ValorLiquido")
+                oItem["valor_desconto"]      := NumProp(aItem[nX], "TaxaAdm")
                 
-                If aItem[nX]["ValorTotal"] > 0
-                    oItem["percentual_desconto"] := ROUND((aItem[nX]["TaxaAdm"] / aItem[nX]["ValorTotal"]) * 100, 2)
+                If oItem["valor_total"] > 0
+                    oItem["percentual_desconto"] := ROUND((oItem["valor_desconto"] / oItem["valor_total"]) * 100, 2)
                 EndIf
                 
-                oItem["vencimento"]          := CTOD(aItem[nX]["Data_Vencimento"])
+                If aItem[nX]:HasProperty("Data_Vencimento") .And. ValType(aItem[nX]["Data_Vencimento"]) == "C" .And. !Empty(aItem[nX]["Data_Vencimento"])
+                    oItem["vencimento"]      := CTOD(aItem[nX]["Data_Vencimento"])
+                EndIf
 
             Case cOrigem == "REDE"
                 // Implementar l�gica REDE
 
             Case cOrigem == "OMNI"
-                oItem["descricao_pagamento"] := "PIX NO PDV"
-                oItem["valor_total"]         := aItem[nX]["amount"]
-                oItem["valor_parcela"]       := aItem[nX]["grossAmount_parcela"]
-                oItem["valor_desconto"]      := aItem[nX]["grossAmount_parcela"] - aItem[nX]["paidAmount_parcela"]
-                oItem["percentual_desconto"] := Iif(oItem["valor_desconto"] > 0,ROUND((oItem["valor_desconto"] * 100)/aItem[nX]["grossAmount_parcela"],2),0)
-                oItem["vencimento"]          := STOD(StrTran(SubStr(aItem[nX]["previsionPaymentDate"],1,10),"-",""))
+                oItem["descricao_pagamento"] := "OMNI - LOJA DIGITAL"
+                oItem["valor_total"]         := NumProp(aItem[nX], "amount")
+                oItem["valor_parcela"]       := NumProp(aItem[nX], "grossAmount_parcela")
+                oItem["valor_desconto"]      := NumProp(aItem[nX], "grossAmount_parcela") - NumProp(aItem[nX], "paidAmount_parcela")
+                If NumProp(aItem[nX], "grossAmount_parcela") > 0 .And. oItem["valor_desconto"] > 0
+                    oItem["percentual_desconto"] := ROUND((oItem["valor_desconto"] * 100) / NumProp(aItem[nX], "grossAmount_parcela"), 2)
+                EndIf
+                If aItem[nX]:HasProperty("previsionPaymentDate") .And. ValType(aItem[nX]["previsionPaymentDate"]) == "C" .And. !Empty(aItem[nX]["previsionPaymentDate"])
+                    oItem["vencimento"]      := STOD(StrTran(SubStr(aItem[nX]["previsionPaymentDate"],1,10),"-",""))
+                EndIf
                 
             Case cOrigem == "PAGARME"
                 // Implementar l�gica PAGARME

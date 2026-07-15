@@ -1270,7 +1270,7 @@ Return
 Job para preparar o ambiente, configurar o RPC e chamar a fun��o principal de consulta e grava��o dos documentos fiscais.
 /*/
 User Function JLOJE001()
-    Local dDataProc := SToD("20260101") // Data inicial do lote - ajuste aqui para mudar o ponto de partida
+    Local dDataProc := SToD("20260111") // Data inicial do lote - ajuste aqui para mudar o ponto de partida
     Local nDiasLote := 30               // Quantidade de dias a processar a partir da data inicial
     Local dDataFim  := dDataProc + nDiasLote - 1
 
